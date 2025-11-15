@@ -44,7 +44,7 @@ import {
 } from '@/components/ui/card';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { db } from '@/lib/firebaseconfig';
+import { db } from '@/lib/firebase-config';
 import { 
   collection, 
   addDoc, 

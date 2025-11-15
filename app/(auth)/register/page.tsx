@@ -16,7 +16,7 @@ import {
     createUserWithEmailAndPassword,
     sendEmailVerification,
 } from 'firebase/auth';
-import { auth, db } from '@/lib/firebaseconfig';
+import { auth, db } from '@/lib/firebase-config';
 import { doc, setDoc } from 'firebase/firestore';
 
 const RegisterPage = () => {
