@@ -14,7 +14,7 @@ import {
     TotpMultiFactorGenerator
 } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase-config';
+import { auth, db } from '@/lib/firebaseconfig';
 
 const LoginPage = () => {
     const router = useRouter();

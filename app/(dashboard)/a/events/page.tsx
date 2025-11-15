@@ -26,14 +26,22 @@ import {
   Church as ChurchIcon,
   Heart,
   Baby,
-  HeartHandshake, // Valid replacement for Ring
+  HeartHandshake,
   Crosshair,
   Sun,
   BookOpen,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react';
+import { collection, addDoc, serverTimestamp, FieldValue } from 'firebase/firestore';
+import { db } from '@/lib/firebase-config';
+import {
+  Card,
+  CardContent,
+} from '@/components/ui/card';
 
 interface ChurchEvent {
-  id: string;
+  id?: string;
   type: string;
   title: string;
   description: string;
@@ -41,7 +49,24 @@ interface ChurchEvent {
   time: string;
   location: string;
   priest?: string;
-  postedAt: string;
+  status: 'active' | 'cancelled';
+  postedAt: FieldValue;
+  createdAt: FieldValue;
+  updatedAt: FieldValue;
+}
+
+interface EventFormData {
+  type: string;
+  title: string;
+  description: string;
+  date: string;
+  time: string;
+  location: string;
+  priest?: string;
+  status: 'active' | 'cancelled';
+  postedAt: FieldValue;
+  createdAt: FieldValue;
+  updatedAt: FieldValue;
 }
 
 const churchEvents = [
@@ -59,6 +84,8 @@ export default function PostChurchEvent() {
   const { toast } = useToast();
   const router = useRouter();
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [successData, setSuccessData] = useState<{title: string; type: string; date: string; time: string} | null>(null);
   const [eventType, setEventType] = useState('');
   const [formData, setFormData] = useState({
     title: '',
@@ -79,39 +106,162 @@ export default function PostChurchEvent() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    
+    // Validation
+    if (!eventType || !formData.title || !formData.date || !formData.time || !formData.location) {
+      toast({
+        title: 'Missing Fields',
+        description: 'Please fill in all required fields.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     setIsSubmitting(true);
 
-    const event: ChurchEvent = {
-      id: Date.now().toString(),
-      type: eventType,
-      title: formData.title,
-      description: formData.description,
-      date: formData.date,
-      time: formData.time,
-      location: formData.location,
-      priest: formData.priest || undefined,
-      postedAt: new Date().toISOString(),
+    try {
+      // Gumawa ng event object na may tamang type
+      const eventData: EventFormData = {
+        type: eventType,
+        title: formData.title.trim(),
+        description: formData.description.trim(),
+        date: formData.date,
+        time: formData.time,
+        location: formData.location.trim(),
+        status: 'active',
+        postedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      // Idagdag lang ang priest kung may laman ito
+      if (formData.priest.trim() !== '') {
+        eventData.priest = formData.priest.trim();
+      }
+
+      console.log('📤 Submitting event to Firestore:', eventData);
+
+      // I-save sa Firestore
+      const docRef = await addDoc(collection(db, 'events'), eventData);
+
+      console.log('✅ Event saved to Firestore with ID:', docRef.id);
+
+      // Set success data
+      setSuccessData({
+        title: formData.title,
+        type: eventType,
+        date: formData.date,
+        time: formData.time
+      });
+
+      // Show success message
+      setShowSuccess(true);
+
+      // Show toast notification
+      toast({
+        title: 'Event Posted Successfully!',
+        description: `${formData.title} is now live for all parishioners.`,
+      });
+
+      // Reset form
+      setEventType('');
+      setFormData({
+        title: '',
+        description: '',
+        date: '',
+        time: '',
+        location: '',
+        priest: '',
+      });
+
+      // Hide success message after 6 seconds
+      setTimeout(() => {
+        setShowSuccess(false);
+        setSuccessData(null);
+      }, 6000);
+
+      // Redirect after 2 seconds
+      setTimeout(() => {
+        router.push('/a/events');
+      }, 2000);
+
+    } catch (error) {
+      console.error('❌ Error posting event:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to post event. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const formatEventType = (eventType: string): string => {
+    const eventTypeMap: Record<string, string> = {
+      confession: 'Confession',
+      mass: 'Holy Mass',
+      rosary: 'Holy Rosary',
+      baptism: 'Baptism',
+      wedding: 'Wedding',
+      funeral: 'Funeral Mass',
+      adoration: 'Adoration',
+      recollection: 'Recollection'
     };
+    return eventTypeMap[eventType] || eventType;
+  };
 
-    // Save to localStorage
-    const existing = JSON.parse(localStorage.getItem('churchEvents') || '[]');
-    existing.unshift(event);
-    localStorage.setItem('churchEvents', JSON.stringify(existing));
-
-    toast({
-      title: 'Event Posted!',
-      description: `${event.title} is now live for all parishioners.`,
-    });
-
-    setTimeout(() => {
-      router.push('/a/events');
-    }, 1500);
+  const formatTime = (time24: string): string => {
+    if (!time24) return '—';
+    const [h, m] = time24.split(':').map(Number);
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    return format(d, 'h:mm a');
   };
 
   return (
     <div className="container mx-auto p-6 max-w-4xl">
+      {/* SUCCESS MESSAGE */}
+      {showSuccess && successData && (
+        <div className="fixed top-4 right-4 left-4 md:left-auto md:max-w-md z-50 animate-in slide-in-from-top duration-500">
+          <Card className="bg-green-50 border-green-200 shadow-lg">
+            <CardContent className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0">
+                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                    <CheckCircle className="w-6 h-6 text-green-600" />
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-bold text-lg text-green-900 mb-2">
+                    ✅ Event Posted Successfully!
+                  </h3>
+                  <div className="space-y-2 text-sm text-green-800">
+                    <p><strong>Title:</strong> {successData.title}</p>
+                    <p><strong>Type:</strong> {formatEventType(successData.type)}</p>
+                    <p><strong>Date:</strong> {format(new Date(successData.date), 'EEEE, MMMM d, yyyy')}</p>
+                    <p><strong>Time:</strong> {formatTime(successData.time)}</p>
+                  </div>
+                  <p className="text-xs text-green-600 mt-3">
+                    Redirecting to events page...
+                  </p>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-green-600 hover:text-green-700 hover:bg-green-100"
+                  onClick={() => setShowSuccess(false)}
+                >
+                  <XCircle className="w-4 h-4" />
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       <div className="mb-8">
         <h1 className="text-3xl font-bold flex items-center gap-3">
           <Church className="w-9 h-9 text-primary" />
@@ -127,13 +277,14 @@ export default function PostChurchEvent() {
         <div className="space-y-2">
           <Label className="flex items-center gap-2">
             <Bell className="w-4 h-4" />
-            Event Type
+            Event Type *
           </Label>
           <Select
             name="eventType"
             onValueChange={setEventType}
             required
             disabled={isSubmitting}
+            value={eventType}
           >
             <SelectTrigger className="h-12">
               <SelectValue placeholder="Select Catholic event" />
@@ -156,7 +307,7 @@ export default function PostChurchEvent() {
 
         {/* Title */}
         <div className="space-y-2">
-          <Label>Title</Label>
+          <Label>Title *</Label>
           <Input
             name="title"
             placeholder="e.g. Daily Mass, Confession Schedule"
@@ -164,6 +315,7 @@ export default function PostChurchEvent() {
             disabled={isSubmitting}
             value={formData.title}
             onChange={handleInputChange}
+            minLength={3}
           />
         </div>
 
@@ -173,7 +325,6 @@ export default function PostChurchEvent() {
           <Textarea
             name="description"
             placeholder="Additional details, reminders, or requirements..."
-
             rows={4}
             disabled={isSubmitting}
             value={formData.description}
@@ -186,7 +337,7 @@ export default function PostChurchEvent() {
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
               <Calendar className="w-4 h-4" />
-              Date
+              Date *
             </Label>
             <Input
               name="date"
@@ -195,12 +346,13 @@ export default function PostChurchEvent() {
               disabled={isSubmitting}
               value={formData.date}
               onChange={handleInputChange}
+              min={new Date().toISOString().split('T')[0]} // Prevent past dates
             />
           </div>
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
               <Clock className="w-4 h-4" />
-              Time
+              Time *
             </Label>
             <Input
               name="time"
@@ -217,7 +369,7 @@ export default function PostChurchEvent() {
         <div className="space-y-2">
           <Label className="flex items-center gap-2">
             <MapPin className="w-4 h-4" />
-            Location
+            Location *
           </Label>
           <Input
             name="location"
@@ -226,6 +378,7 @@ export default function PostChurchEvent() {
             disabled={isSubmitting}
             value={formData.location}
             onChange={handleInputChange}
+            minLength={3}
           />
         </div>
 
@@ -249,17 +402,13 @@ export default function PostChurchEvent() {
           type="submit"
           size="lg"
           className="w-full bg-primary hover:bg-primary/90 text-lg font-medium"
-          disabled={
-            isSubmitting ||
-            !eventType ||
-            !formData.title ||
-            !formData.date ||
-            !formData.time ||
-            !formData.location
-          }
+          disabled={isSubmitting}
         >
           {isSubmitting ? (
-            <>Posting Event...</>
+            <>
+              <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
+              Posting Event...
+            </>
           ) : (
             <div className="flex items-center gap-2">
               <Bell className="w-5 h-5" />

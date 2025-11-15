@@ -1,31 +1,39 @@
-// app/a/dashboard/page.tsx
+// app/a/appointments/page.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import { 
-  Users, 
-  Calendar, 
-  PlusCircle, 
-  Settings,
-  Church,
-  Bell,
-  TrendingUp,
-  Clock,
-  UserCheck,
+import {
+  Calendar,
+  Search,
   CheckCircle,
   XCircle,
+  Clock,
+  User,
   Mail,
-  Phone
+  Phone,
+  Download,
+  Printer,
+  Eye,
+  RefreshCw
 } from 'lucide-react';
-import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
+import { db } from '@/lib/firebase-config';
+import { 
+  collection, 
+  getDocs, 
+  updateDoc, 
+  doc, 
+  query, 
+  orderBy, 
+  where,
+  onSnapshot 
+} from 'firebase/firestore';
 
-// Types for our data - SAME STRUCTURE as client form
 interface Appointment {
   id: string;
   fullName: string;
@@ -37,157 +45,147 @@ interface Appointment {
   guestCount: string;
   message?: string;
   status: 'pending' | 'approved' | 'rejected';
-  submittedAt: string;
+  createdAt: any;
+  updatedAt: any;
 }
 
-interface DashboardStats {
-  totalParishioners: number;
-  upcomingEvents: number;
-  pendingAppointments: number;
-  activeUsersToday: number;
-}
-
-const AdminDashboardPage = () => {
+export default function ManageAppointmentsPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
-  const [stats, setStats] = useState<DashboardStats>({
-    totalParishioners: 0,
-    upcomingEvents: 0,
-    pendingAppointments: 0,
-    activeUsersToday: 0
-  });
+  const [filteredAppointments, setFilteredAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const { toast } = useToast();
 
-  // Fetch REAL appointments from localStorage (same storage used by client form)
+  // Real-time listener for appointments
   useEffect(() => {
-    const fetchDashboardData = () => {
+    const fetchAppointments = async () => {
       try {
         setLoading(true);
-        
-        // GET REAL APPOINTMENTS FROM LOCALSTORAGE
-        const storedAppointments = localStorage.getItem('appointments');
-        const realAppointments: Appointment[] = storedAppointments 
-          ? JSON.parse(storedAppointments) 
-          : [];
+        const appointmentsQuery = query(
+          collection(db, 'appointments'),
+          orderBy('createdAt', 'desc')
+        );
 
-        // Sort by most recent first
-        const sortedAppointments = realAppointments.sort((a, b) => 
-          new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
-        ).slice(0, 5); // Show only latest 5
-
-        setAppointments(sortedAppointments);
-
-        // Calculate real stats
-        const pendingCount = realAppointments.filter(apt => apt.status === 'pending').length;
-        const totalEvents = JSON.parse(localStorage.getItem('churchEvents') || '[]').length;
-
-        setStats({
-          totalParishioners: realAppointments.length * 3, // Estimate
-          upcomingEvents: totalEvents,
-          pendingAppointments: pendingCount,
-          activeUsersToday: Math.floor(Math.random() * 50) + 100 // Random for demo
+        // Real-time listener
+        const unsubscribe = onSnapshot(appointmentsQuery, (querySnapshot) => {
+          const appointmentsData: Appointment[] = [];
+          querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            appointmentsData.push({
+              id: doc.id,
+              fullName: data.fullName || '',
+              email: data.email || '',
+              phone: data.phone || '',
+              eventType: data.eventType || '',
+              eventDate: data.eventDate || '',
+              eventTime: data.eventTime || '',
+              guestCount: data.guestCount || '',
+              message: data.message || '',
+              status: data.status || 'pending',
+              createdAt: data.createdAt,
+              updatedAt: data.updatedAt
+            });
+          });
+          
+          setAppointments(appointmentsData);
+          setLoading(false);
+          setRefreshing(false);
         });
 
+        return () => unsubscribe();
       } catch (error) {
-        console.error('Error fetching dashboard data:', error);
+        console.error('Error fetching appointments:', error);
         toast({
           title: 'Error',
-          description: 'Failed to load dashboard data',
+          description: 'Failed to load appointments from Firebase',
           variant: 'destructive'
         });
-        
-        // Fallback to mock data if no real data exists
-        setAppointments(getMockAppointments());
-      } finally {
         setLoading(false);
+        setRefreshing(false);
+        
+        // Fallback to localStorage
+        const storedAppointments = localStorage.getItem('appointments');
+        if (storedAppointments) {
+          try {
+            const localAppointments: Appointment[] = JSON.parse(storedAppointments);
+            setAppointments(localAppointments);
+          } catch (e) {
+            console.error('Failed to load from localStorage:', e);
+          }
+        }
       }
     };
 
-    fetchDashboardData();
-
-    // Listen for storage changes (when new appointments are added from client form)
-    const handleStorageChange = () => {
-      fetchDashboardData();
-    };
-
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+    fetchAppointments();
   }, [toast]);
 
-  // Mock data fallback - only used if no real data exists
-  const getMockAppointments = (): Appointment[] => [
-    {
-      id: '1',
-      fullName: 'Maria Santos',
-      email: 'maria.santos@email.com',
-      phone: '+639171234567',
-      eventType: 'Baptism',
-      eventDate: '2025-11-18',
-      eventTime: '09:00 AM',
-      guestCount: '5',
-      message: 'For my newborn baby girl',
-      status: 'pending',
-      submittedAt: '2025-11-15T10:30:00Z'
-    },
-    {
-      id: '2',
-      fullName: 'Juan Dela Cruz',
-      email: 'juan.dc@email.com',
-      phone: '+639182345678',
-      eventType: 'Wedding',
-      eventDate: '2025-12-01',
-      eventTime: '02:00 PM',
-      guestCount: '50',
-      message: 'Church wedding ceremony',
-      status: 'approved',
-      submittedAt: '2025-11-14T14:20:00Z'
+  // Filter appointments based on search and status
+  useEffect(() => {
+    let filtered = appointments;
+
+    // Apply status filter
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(apt => apt.status === statusFilter);
     }
-  ];
 
-  // Handle approve/reject actions - UPDATES LOCALSTORAGE
-  const handleAppointmentAction = async (appointmentId: string, action: 'approve' | 'reject') => {
-    try {
-      // Get current appointments from localStorage
-      const storedAppointments = localStorage.getItem('appointments');
-      let allAppointments: Appointment[] = storedAppointments 
-        ? JSON.parse(storedAppointments) 
-        : [];
-
-      // Update the specific appointment
-      const updatedAppointments = allAppointments.map(apt => 
-        apt.id === appointmentId 
-          ? { ...apt, status: action === 'approve' ? 'approved' : 'rejected' }
-          : apt
+    // Apply search filter
+    if (searchTerm) {
+      filtered = filtered.filter(apt =>
+        apt.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        apt.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        apt.eventType.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        apt.phone.includes(searchTerm)
       );
+    }
 
-      // Save back to localStorage
+    setFilteredAppointments(filtered);
+  }, [appointments, searchTerm, statusFilter]);
+
+  // Update appointment status in Firebase
+  const handleStatusUpdate = async (appointmentId: string, newStatus: 'approved' | 'rejected') => {
+    try {
+      setRefreshing(true);
+      
+      // Update in Firebase
+      const appointmentRef = doc(db, 'appointments', appointmentId);
+      await updateDoc(appointmentRef, {
+        status: newStatus,
+        updatedAt: new Date()
+      });
+
+      // Also update localStorage as backup
+      const updatedAppointments = appointments.map(apt =>
+        apt.id === appointmentId ? { ...apt, status: newStatus } : apt
+      );
       localStorage.setItem('appointments', JSON.stringify(updatedAppointments));
 
-      // Update local state
-      setAppointments(prev => prev.map(apt => 
-        apt.id === appointmentId 
-          ? { ...apt, status: action === 'approve' ? 'approved' : 'rejected' }
-          : apt
-      ));
-
-      // Update stats
-      setStats(prev => ({
-        ...prev,
-        pendingAppointments: prev.pendingAppointments - 1
-      }));
-
+      const appointment = appointments.find(apt => apt.id === appointmentId);
+      
       toast({
-        title: `Appointment ${action === 'approve' ? 'Approved' : 'Rejected'}`,
-        description: `The appointment has been ${action === 'approve' ? 'approved' : 'rejected'}.`,
+        title: `Appointment ${newStatus === 'approved' ? 'Approved' : 'Rejected'}`,
+        description: `${appointment?.fullName}'s ${formatEventType(appointment?.eventType || '')} has been ${newStatus}.`,
       });
 
     } catch (error) {
+      console.error('Error updating appointment:', error);
       toast({
         title: 'Error',
-        description: `Failed to ${action} appointment`,
+        description: `Failed to update appointment status`,
         variant: 'destructive'
       });
+    } finally {
+      setRefreshing(false);
     }
+  };
+
+  // Refresh data manually
+  const handleRefresh = () => {
+    setRefreshing(true);
+    // The real-time listener will automatically update the data
+    setTimeout(() => setRefreshing(false), 1000);
   };
 
   const getStatusBadge = (status: string) => {
@@ -206,13 +204,26 @@ const AdminDashboardPage = () => {
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
     });
   };
 
-  const formatEventType = (eventType: string) => {
+  const formatDateTime = (timestamp: any) => {
+    if (!timestamp) return 'N/A';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const formatEventType = (eventType: string): string => {
     const eventMap: Record<string, string> = {
       'mass': 'Holy Mass',
       'wedding': 'Wedding',
@@ -222,280 +233,396 @@ const AdminDashboardPage = () => {
     return eventMap[eventType] || eventType;
   };
 
+  const getStats = () => {
+    const total = appointments.length;
+    const pending = appointments.filter(apt => apt.status === 'pending').length;
+    const approved = appointments.filter(apt => apt.status === 'approved').length;
+    const rejected = appointments.filter(apt => apt.status === 'rejected').length;
+
+    return { total, pending, approved, rejected };
+  };
+
+  const stats = getStats();
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading dashboard...</p>
+          <p className="mt-4 text-muted-foreground">Loading appointments from Firebase...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-primary/5 via-background to-background">
-      {/* Hero Header */}
+    <div className="min-h-screen bg-gradient-to-b from-primary/5 to-background">
+      {/* Header */}
       <div className="bg-gradient-to-r from-primary to-primary/80 text-primary-foreground">
         <div className="container mx-auto px-6 py-8">
           <div className="flex items-center justify-between">
             <div>
               <h1 className="text-3xl md:text-4xl font-bold flex items-center gap-3">
-                <Church className="w-10 h-10" />
-                Admin Dashboard
+                <Calendar className="w-10 h-10" />
+                Manage Appointments
               </h1>
               <p className="mt-2 text-primary-foreground/80">
-                Welcome back, Father! Manage your parish with grace.
+                Real-time management of all sacrament appointment requests from Firebase
               </p>
             </div>
             <div className="flex items-center gap-4">
-              <Button variant="secondary" size="lg" className="gap-2">
-                <Bell className="w-5 h-5" />
-                <span>{stats.pendingAppointments} Pending</span>
+              <Button 
+                variant="secondary" 
+                size="lg" 
+                className="gap-2"
+                onClick={handleRefresh}
+                disabled={refreshing}
+              >
+                <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
+                Refresh
               </Button>
-              <Avatar className="ring-4 ring-background">
-                <AvatarImage src="/admin-avatar.jpg" />
-                <AvatarFallback>FR</AvatarFallback>
-              </Avatar>
+              <Button variant="secondary" size="lg" className="gap-2">
+                <Download className="w-5 h-5" />
+                Export
+              </Button>
+              <Button variant="secondary" size="lg" className="gap-2">
+                <Printer className="w-5 h-5" />
+                Print
+              </Button>
             </div>
           </div>
         </div>
       </div>
 
       <div className="container mx-auto px-6 py-8 -mt-6">
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <Card className="border-l-4 border-l-primary shadow-lg">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Appointments
-              </CardTitle>
-              <Users className="w-5 h-5 text-primary" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stats.totalParishioners.toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                <TrendingUp className="w-3 h-3 text-green-600" />
-                All time requests
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-l-4 border-l-blue-500 shadow-lg">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Upcoming Events
-              </CardTitle>
-              <Calendar className="w-5 h-5 text-blue-600" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stats.upcomingEvents}</div>
-              <p className="text-xs text-muted-foreground">Posted events</p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-l-4 border-l-green-500 shadow-lg">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Pending Appointments
-              </CardTitle>
-              <Clock className="w-5 h-5 text-green-600" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stats.pendingAppointments}</div>
-              <p className="text-xs text-muted-foreground">Need approval</p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-l-4 border-l-purple-500 shadow-lg">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Active Today
-              </CardTitle>
-              <UserCheck className="w-5 h-5 text-purple-600" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stats.activeUsersToday}</div>
-              <p className="text-xs text-muted-foreground">Portal visitors</p>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="mb-8">
-          <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
-            Quick Actions
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-primary to-primary/80 hover:from-primary/80 hover:to-primary text-primary-foreground shadow-lg">
-              <Link href="/a/users">
-                <Users className="w-8 h-8" />
-                <span className="text-sm">Manage Users</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg">
-              <Link href="/a/appointments">
-                <Calendar className="w-8 h-8" />
-                <span className="text-sm">Manage Appointments</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white shadow-lg">
-              <Link href="/a/events/post">
-                <PlusCircle className="w-8 h-8" />
-                <span className="text-sm">Post New Event</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" variant="outline" className="h-24 flex flex-col gap-2 border-2 hover:border-primary shadow-lg">
-              <Link href="/a/settings">
-                <Settings className="w-8 h-8" />
-                <span className="text-sm">System Settings</span>
-              </Link>
-            </Button>
-          </div>
-        </div>
-
-        <Separator className="my-8" />
-
-        {/* Recent Activity */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Recent Appointments - REAL DATA FROM CLIENT FORM */}
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between">
-              <div>
-                <CardTitle className="flex items-center gap-2">
-                  Recent Appointments
-                  {stats.pendingAppointments > 0 && (
-                    <Badge variant="secondary">{stats.pendingAppointments} Pending</Badge>
-                  )}
-                </CardTitle>
-                <CardDescription>
-                  Real appointments from parishioners - {appointments.length} total
-                </CardDescription>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Total Appointments</p>
+                  <p className="text-2xl font-bold">{stats.total}</p>
+                </div>
+                <Calendar className="w-8 h-8 text-primary" />
               </div>
-              <Button asChild variant="outline" size="sm">
-                <Link href="/a/appointments">
-                  View All
-                </Link>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Pending</p>
+                  <p className="text-2xl font-bold text-yellow-600">{stats.pending}</p>
+                </div>
+                <Clock className="w-8 h-8 text-yellow-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Approved</p>
+                  <p className="text-2xl font-bold text-green-600">{stats.approved}</p>
+                </div>
+                <CheckCircle className="w-8 h-8 text-green-600" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">Rejected</p>
+                  <p className="text-2xl font-bold text-red-600">{stats.rejected}</p>
+                </div>
+                <XCircle className="w-8 h-8 text-red-600" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Filters and Search */}
+        <Card className="mb-8">
+          <CardContent className="p-6">
+            <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+              <div className="flex flex-1 gap-4 w-full md:w-auto">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                  <Input
+                    placeholder="Search by name, email, or event type..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+              </div>
+              
+              <div className="flex gap-2 w-full md:w-auto">
+                <Button
+                  variant={statusFilter === 'all' ? 'default' : 'outline'}
+                  onClick={() => setStatusFilter('all')}
+                  size="sm"
+                >
+                  All ({stats.total})
+                </Button>
+                <Button
+                  variant={statusFilter === 'pending' ? 'default' : 'outline'}
+                  onClick={() => setStatusFilter('pending')}
+                  size="sm"
+                  className="gap-2"
+                >
+                  <Clock className="w-4 h-4" />
+                  Pending ({stats.pending})
+                </Button>
+                <Button
+                  variant={statusFilter === 'approved' ? 'default' : 'outline'}
+                  onClick={() => setStatusFilter('approved')}
+                  size="sm"
+                  className="gap-2"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Approved ({stats.approved})
+                </Button>
+                <Button
+                  variant={statusFilter === 'rejected' ? 'default' : 'outline'}
+                  onClick={() => setStatusFilter('rejected')}
+                  size="sm"
+                  className="gap-2"
+                >
+                  <XCircle className="w-4 h-4" />
+                  Rejected ({stats.rejected})
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Appointments List */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Appointment Requests</CardTitle>
+            <CardDescription>
+              {filteredAppointments.length} appointment(s) found • Real-time from Firebase
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {filteredAppointments.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <Calendar className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                  <p className="text-lg">No appointments found</p>
+                  <p className="text-sm mt-2">
+                    {appointments.length === 0 
+                      ? "No appointments have been submitted yet." 
+                      : "Try adjusting your search or filters."}
+                  </p>
+                </div>
+              ) : (
+                filteredAppointments.map((appointment) => (
+                  <div key={appointment.id} className="border rounded-lg p-6 hover:shadow-md transition-shadow">
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+                      {/* Appointment Details */}
+                      <div className="flex-1">
+                        <div className="flex items-start justify-between mb-3">
+                          <div>
+                            <h3 className="font-bold text-lg flex items-center gap-2">
+                              <User className="w-5 h-5 text-primary" />
+                              {appointment.fullName}
+                            </h3>
+                            <div className="flex items-center gap-4 mt-1 text-sm text-muted-foreground">
+                              <span className="flex items-center gap-1">
+                                <Mail className="w-4 h-4" />
+                                {appointment.email}
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <Phone className="w-4 h-4" />
+                                {appointment.phone}
+                              </span>
+                            </div>
+                          </div>
+                          {getStatusBadge(appointment.status)}
+                        </div>
+
+                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
+                          <div>
+                            <p className="font-semibold">Event Type</p>
+                            <p className="text-primary">{formatEventType(appointment.eventType)}</p>
+                          </div>
+                          <div>
+                            <p className="font-semibold">Date & Time</p>
+                            <p>{formatDate(appointment.eventDate)} at {appointment.eventTime}</p>
+                          </div>
+                          <div>
+                            <p className="font-semibold">Guests</p>
+                            <p>{appointment.guestCount} people</p>
+                          </div>
+                          <div>
+                            <p className="font-semibold">Submitted</p>
+                            <p>{formatDateTime(appointment.createdAt)}</p>
+                          </div>
+                        </div>
+
+                        {appointment.message && (
+                          <div className="mt-3 p-3 bg-muted/50 rounded-lg">
+                            <p className="font-semibold text-sm mb-1">Additional Notes:</p>
+                            <p className="text-sm">"{appointment.message}"</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex flex-col gap-2 lg:w-48">
+                        {appointment.status === 'pending' && (
+                          <>
+                            <Button
+                              onClick={() => handleStatusUpdate(appointment.id, 'approved')}
+                              className="gap-2 bg-green-600 hover:bg-green-700"
+                              size="sm"
+                              disabled={refreshing}
+                            >
+                              <CheckCircle className="w-4 h-4" />
+                              Approve
+                            </Button>
+                            <Button
+                              onClick={() => handleStatusUpdate(appointment.id, 'rejected')}
+                              variant="outline"
+                              className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50"
+                              size="sm"
+                              disabled={refreshing}
+                            >
+                              <XCircle className="w-4 h-4" />
+                              Reject
+                            </Button>
+                          </>
+                        )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2"
+                          onClick={() => setSelectedAppointment(appointment)}
+                        >
+                          <Eye className="w-4 h-4" />
+                          View Details
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Appointment Detail Modal */}
+      {selectedAppointment && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <User className="w-6 h-6" />
+                Appointment Details
+              </CardTitle>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="absolute right-4 top-4"
+                onClick={() => setSelectedAppointment(null)}
+              >
+                ✕
               </Button>
             </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {appointments.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>No appointments yet</p>
-                    <p className="text-sm mt-2">Appointments will appear here when parishioners submit forms</p>
-                  </div>
-                ) : (
-                  appointments.map((appointment) => (
-                    <div key={appointment.id} className="flex items-start justify-between p-4 rounded-lg border bg-card hover:shadow-md transition-shadow">
-                      <div className="flex items-start gap-3 flex-1">
-                        <Avatar className="h-10 w-10">
-                          <AvatarFallback>
-                            {appointment.fullName.split(' ').map(n => n[0]).join('')}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <p className="font-medium truncate">{appointment.fullName}</p>
-                            {getStatusBadge(appointment.status)}
-                          </div>
-                          
-                          <p className="text-sm font-medium text-primary">
-                            {formatEventType(appointment.eventType)}
-                          </p>
-                          
-                          <p className="text-sm text-muted-foreground">
-                            {formatDate(appointment.eventDate)} at {appointment.eventTime}
-                          </p>
-                          
-                          <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                            <span className="flex items-center gap-1">
-                              <Mail className="w-3 h-3" />
-                              {appointment.email}
-                            </span>
-                            <span className="flex items-center gap-1">
-                              <Phone className="w-3 h-3" />
-                              {appointment.phone}
-                            </span>
-                            <span>
-                              {appointment.guestCount} guests
-                            </span>
-                          </div>
+            <CardContent className="space-y-4">
+              <div className="grid md:grid-cols-2 gap-4">
+                <div>
+                  <p className="font-semibold">Full Name</p>
+                  <p>{selectedAppointment.fullName}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Email</p>
+                  <p>{selectedAppointment.email}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Phone</p>
+                  <p>{selectedAppointment.phone}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Event Type</p>
+                  <p>{formatEventType(selectedAppointment.eventType)}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Date</p>
+                  <p>{formatDate(selectedAppointment.eventDate)}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Time</p>
+                  <p>{selectedAppointment.eventTime}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Number of Guests</p>
+                  <p>{selectedAppointment.guestCount}</p>
+                </div>
+                <div>
+                  <p className="font-semibold">Status</p>
+                  {getStatusBadge(selectedAppointment.status)}
+                </div>
+                <div className="md:col-span-2">
+                  <p className="font-semibold">Submitted On</p>
+                  <p>{formatDateTime(selectedAppointment.createdAt)}</p>
+                </div>
+              </div>
+              
+              {selectedAppointment.message && (
+                <div>
+                  <p className="font-semibold">Additional Message</p>
+                  <p className="p-3 bg-muted/50 rounded-lg mt-1">"{selectedAppointment.message}"</p>
+                </div>
+              )}
 
-                          {appointment.message && (
-                            <p className="text-xs text-muted-foreground mt-2 p-2 bg-muted/50 rounded">
-                              "{appointment.message}"
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      
-                      {appointment.status === 'pending' && (
-                        <div className="flex gap-1 ml-4">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 w-8 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
-                            onClick={() => handleAppointmentAction(appointment.id, 'approve')}
-                            title="Approve"
-                          >
-                            <CheckCircle className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                            onClick={() => handleAppointmentAction(appointment.id, 'reject')}
-                            title="Reject"
-                          >
-                            <XCircle className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  ))
+              <div className="flex gap-2 pt-4">
+                <Button
+                  onClick={() => {
+                    setSelectedAppointment(null);
+                  }}
+                  variant="outline"
+                >
+                  Close
+                </Button>
+                {selectedAppointment.status === 'pending' && (
+                  <>
+                    <Button
+                      onClick={() => {
+                        handleStatusUpdate(selectedAppointment.id, 'approved');
+                        setSelectedAppointment(null);
+                      }}
+                      className="bg-green-600 hover:bg-green-700"
+                      disabled={refreshing}
+                    >
+                      Approve Appointment
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        handleStatusUpdate(selectedAppointment.id, 'rejected');
+                        setSelectedAppointment(null);
+                      }}
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      disabled={refreshing}
+                    >
+                      Reject Appointment
+                    </Button>
+                  </>
                 )}
               </div>
             </CardContent>
           </Card>
-
-          {/* Recent Events */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Recently Posted Events</CardTitle>
-              <CardDescription>Visible to all parishioners</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-4">
-                {[
-                  { title: "Feast of Christ the King", date: "Nov 24, 2025", attendees: "500+" },
-                  { title: "Advent Recollection", date: "Dec 7, 2025", attendees: "120" },
-                  { title: "Simbang Gabi Schedule", date: "Dec 16–24, 2025", attendees: "All" },
-                ].map((event, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                    <div>
-                      <p className="font-medium">{event.title}</p>
-                      <p className="text-sm text-muted-foreground">{event.date}</p>
-                    </div>
-                    <Badge variant="outline">{event.attendees} expected</Badge>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
         </div>
-
-        {/* Footer Note */}
-        <div className="mt-12 text-center text-sm text-muted-foreground">
-          <p>"Go and make disciples of all nations." — Matthew 28:19</p>
-        </div>
-      </div>
+      )}
     </div>
   );
-};
-
-export default AdminDashboardPage;
+}

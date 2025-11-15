@@ -334,7 +334,7 @@ const AdminDashboardPage = () => {
             </Button>
 
             <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white shadow-lg">
-              <Link href="/a/events/post">
+              <Link href="/a/events">
                 <PlusCircle className="w-8 h-8" />
                 <span className="text-sm">Post New Event</span>
               </Link>

@@ -1,4 +1,3 @@
-// app/c/dashboard/page.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -11,7 +10,6 @@ import {
   Calendar,
   Clock,
   MapPin,
-  Bell,
   Users,
   Heart,
   CheckCircle,
@@ -30,8 +28,6 @@ interface Appointment {
   eventTime: string;
   status: 'pending' | 'approved' | 'rejected';
   submittedAt: string;
-  priest?: string;
-  message?: string;
 }
 
 interface ChurchEvent {
@@ -103,16 +99,14 @@ export default function ClientDashboardPage() {
       eventDate: '2025-11-18',
       eventTime: '09:00 AM',
       status: 'approved',
-      submittedAt: '2025-11-15T10:30:00Z',
-      priest: 'Fr. Michael Santos',
-      message: 'For my newborn baby girl'
+      submittedAt: '2025-11-15T10:30:00Z'
     },
     {
       id: '2',
       eventType: 'Wedding',
       eventDate: '2025-12-01',
       eventTime: '02:00 PM',
-      status: 'pending',
+      status: 'approved',
       submittedAt: '2025-11-14T14:20:00Z'
     }
   ];
@@ -138,13 +132,12 @@ export default function ClientDashboardPage() {
 
   const getStatusBadge = (status: string) => {
     const variants = {
-      pending: 'default',
       approved: 'secondary',
       rejected: 'destructive'
     } as const;
 
     return (
-      <Badge variant={variants[status as keyof typeof variants]}>
+      <Badge variant={variants[status as keyof typeof variants] || 'default'}>
         {status.charAt(0).toUpperCase() + status.slice(1)}
       </Badge>
     );
@@ -169,7 +162,6 @@ export default function ClientDashboardPage() {
   };
 
   const upcomingAppointment = getUpcomingAppointment();
-  const pendingCount = appointments.filter(apt => apt.status === 'pending').length;
 
   if (loading) {
     return (
@@ -198,10 +190,6 @@ export default function ClientDashboardPage() {
               </p>
             </div>
             <div className="flex items-center gap-4">
-              <Button variant="secondary" size="lg" className="gap-2">
-                <Bell className="w-5 h-5" />
-                <span>{pendingCount} Pending</span>
-              </Button>
               <Avatar className="ring-4 ring-background">
                 <AvatarFallback>
                   {userData.name.split(' ').map(n => n[0]).join('')}
@@ -225,7 +213,7 @@ export default function ClientDashboardPage() {
             <CardContent>
               <div className="text-2xl font-bold">{appointments.length}</div>
               <p className="text-xs text-muted-foreground">
-                {pendingCount} pending approval
+                Total bookings
               </p>
             </CardContent>
           </Card>
@@ -325,18 +313,7 @@ export default function ClientDashboardPage() {
                         <Clock className="w-4 h-4 text-green-600" />
                         <span>{upcomingAppointment.eventTime}</span>
                       </p>
-                      {upcomingAppointment.priest && (
-                        <p className="flex items-center gap-2">
-                          <Users className="w-4 h-4 text-green-600" />
-                          <span>With {upcomingAppointment.priest}</span>
-                        </p>
-                      )}
                     </div>
-                    {upcomingAppointment.message && (
-                      <p className="mt-3 p-2 bg-white rounded border text-sm">
-                        "{upcomingAppointment.message}"
-                      </p>
-                    )}
                     <div className="flex gap-2 mt-4">
                       <Button size="sm" variant="outline" className="gap-2">
                         <Calendar className="w-4 h-4" />
@@ -383,12 +360,9 @@ export default function ClientDashboardPage() {
                         <div className="flex items-center gap-3">
                           <div className={`p-2 rounded-full ${
                             appointment.status === 'approved' ? 'bg-green-100 text-green-600' :
-                            appointment.status === 'pending' ? 'bg-yellow-100 text-yellow-600' :
                             'bg-red-100 text-red-600'
                           }`}>
-                            {appointment.status === 'approved' ? <CheckCircle className="w-4 h-4" /> :
-                             appointment.status === 'pending' ? <Clock className="w-4 h-4" /> :
-                             <XCircle className="w-4 h-4" />}
+                            {appointment.status === 'approved' ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                           </div>
                           <div>
                             <p className="font-medium">{appointment.eventType}</p>
@@ -475,7 +449,7 @@ export default function ClientDashboardPage() {
                 </div>
                 <Button className="w-full mt-4 gap-2">
                   <Mail className="w-4 h-4" />
-                  Send Message
+                  Contact Church
                 </Button>
               </CardContent>
             </Card>
