@@ -71,7 +71,7 @@
 
   /* Alerts */
   --destructive: oklch(0.63 0.25 27);
-  
+
   /* Components */
   --border: oklch(0.9 0.01 250);
   --input: oklch(0.9 0.01 250);
@@ -145,6 +145,7 @@
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
   }
