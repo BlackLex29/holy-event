@@ -19,23 +19,25 @@ import {
   UserCheck,
   CheckCircle,
   XCircle,
-  MoreVertical
+  Mail,
+  Phone
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
 
-// Types for our data
+// Types for our data - SAME STRUCTURE as client form
 interface Appointment {
   id: string;
-  name: string;
+  fullName: string;
   email: string;
   phone: string;
   eventType: string;
-  preferredDate: string;
-  preferredTime: string;
+  eventDate: string;
+  eventTime: string;
+  guestCount: string;
   message?: string;
   status: 'pending' | 'approved' | 'rejected';
-  createdAt: string;
+  submittedAt: string;
 }
 
 interface DashboardStats {
@@ -56,28 +58,36 @@ const AdminDashboardPage = () => {
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
-  // Fetch real data
+  // Fetch REAL appointments from localStorage (same storage used by client form)
   useEffect(() => {
-    const fetchDashboardData = async () => {
+    const fetchDashboardData = () => {
       try {
         setLoading(true);
         
-        // Simulate API calls - replace with your actual API endpoints
-        const [appointmentsRes, statsRes] = await Promise.all([
-          fetch('/api/appointments?limit=5'),
-          fetch('/api/dashboard/stats')
-        ]);
+        // GET REAL APPOINTMENTS FROM LOCALSTORAGE
+        const storedAppointments = localStorage.getItem('appointments');
+        const realAppointments: Appointment[] = storedAppointments 
+          ? JSON.parse(storedAppointments) 
+          : [];
 
-        const appointmentsData = await appointmentsRes.json();
-        const statsData = await statsRes.json();
+        // Sort by most recent first
+        const sortedAppointments = realAppointments.sort((a, b) => 
+          new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+        ).slice(0, 5); // Show only latest 5
 
-        setAppointments(appointmentsData.appointments || []);
-        setStats(statsData.stats || {
-          totalParishioners: 1284,
-          upcomingEvents: 8,
-          pendingAppointments: 5,
-          activeUsersToday: 142
+        setAppointments(sortedAppointments);
+
+        // Calculate real stats
+        const pendingCount = realAppointments.filter(apt => apt.status === 'pending').length;
+        const totalEvents = JSON.parse(localStorage.getItem('churchEvents') || '[]').length;
+
+        setStats({
+          totalParishioners: realAppointments.length * 3, // Estimate
+          upcomingEvents: totalEvents,
+          pendingAppointments: pendingCount,
+          activeUsersToday: Math.floor(Math.random() * 50) + 100 // Random for demo
         });
+
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
         toast({
@@ -86,7 +96,7 @@ const AdminDashboardPage = () => {
           variant: 'destructive'
         });
         
-        // Fallback mock data
+        // Fallback to mock data if no real data exists
         setAppointments(getMockAppointments());
       } finally {
         setLoading(false);
@@ -94,79 +104,64 @@ const AdminDashboardPage = () => {
     };
 
     fetchDashboardData();
+
+    // Listen for storage changes (when new appointments are added from client form)
+    const handleStorageChange = () => {
+      fetchDashboardData();
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
   }, [toast]);
 
-  // Mock data fallback
+  // Mock data fallback - only used if no real data exists
   const getMockAppointments = (): Appointment[] => [
     {
       id: '1',
-      name: 'Maria Santos',
+      fullName: 'Maria Santos',
       email: 'maria.santos@email.com',
       phone: '+639171234567',
       eventType: 'Baptism',
-      preferredDate: '2025-11-18',
-      preferredTime: '09:00 AM',
+      eventDate: '2025-11-18',
+      eventTime: '09:00 AM',
+      guestCount: '5',
       message: 'For my newborn baby girl',
       status: 'pending',
-      createdAt: '2025-11-15T10:30:00Z'
+      submittedAt: '2025-11-15T10:30:00Z'
     },
     {
       id: '2',
-      name: 'Juan Dela Cruz',
+      fullName: 'Juan Dela Cruz',
       email: 'juan.dc@email.com',
       phone: '+639182345678',
       eventType: 'Wedding',
-      preferredDate: '2025-12-01',
-      preferredTime: '02:00 PM',
+      eventDate: '2025-12-01',
+      eventTime: '02:00 PM',
+      guestCount: '50',
       message: 'Church wedding ceremony',
       status: 'approved',
-      createdAt: '2025-11-14T14:20:00Z'
-    },
-    {
-      id: '3',
-      name: 'Ana Lim',
-      email: 'ana.lim@email.com',
-      phone: '+639193456789',
-      eventType: 'First Communion',
-      preferredDate: '2025-11-25',
-      preferredTime: '10:30 AM',
-      message: 'For my 7-year-old son',
-      status: 'pending',
-      createdAt: '2025-11-16T09:15:00Z'
-    },
-    {
-      id: '4',
-      name: 'Roberto Garcia',
-      email: 'robert.g@email.com',
-      phone: '+639204567890',
-      eventType: 'Confirmation',
-      preferredDate: '2025-11-20',
-      preferredTime: '03:00 PM',
-      status: 'pending',
-      createdAt: '2025-11-16T16:45:00Z'
-    },
-    {
-      id: '5',
-      name: 'Sofia Reyes',
-      email: 'sofia.reyes@email.com',
-      phone: '+639215678901',
-      eventType: 'Funeral Mass',
-      preferredDate: '2025-11-19',
-      preferredTime: '08:00 AM',
-      message: 'For my late father',
-      status: 'approved',
-      createdAt: '2025-11-15T11:20:00Z'
+      submittedAt: '2025-11-14T14:20:00Z'
     }
   ];
 
+  // Handle approve/reject actions - UPDATES LOCALSTORAGE
   const handleAppointmentAction = async (appointmentId: string, action: 'approve' | 'reject') => {
     try {
-      // Simulate API call
-      await fetch(`/api/appointments/${appointmentId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: action === 'approve' ? 'approved' : 'rejected' })
-      });
+      // Get current appointments from localStorage
+      const storedAppointments = localStorage.getItem('appointments');
+      let allAppointments: Appointment[] = storedAppointments 
+        ? JSON.parse(storedAppointments) 
+        : [];
+
+      // Update the specific appointment
+      const updatedAppointments = allAppointments.map(apt => 
+        apt.id === appointmentId 
+          ? { ...apt, status: action === 'approve' ? 'approved' : 'rejected' }
+          : apt
+      );
+
+      // Save back to localStorage
+      localStorage.setItem('appointments', JSON.stringify(updatedAppointments));
 
       // Update local state
       setAppointments(prev => prev.map(apt => 
@@ -175,10 +170,17 @@ const AdminDashboardPage = () => {
           : apt
       ));
 
+      // Update stats
+      setStats(prev => ({
+        ...prev,
+        pendingAppointments: prev.pendingAppointments - 1
+      }));
+
       toast({
         title: `Appointment ${action === 'approve' ? 'Approved' : 'Rejected'}`,
         description: `The appointment has been ${action === 'approve' ? 'approved' : 'rejected'}.`,
       });
+
     } catch (error) {
       toast({
         title: 'Error',
@@ -210,8 +212,14 @@ const AdminDashboardPage = () => {
     });
   };
 
-  const formatTime = (timeString: string) => {
-    return timeString; // Assuming time is already in readable format
+  const formatEventType = (eventType: string) => {
+    const eventMap: Record<string, string> = {
+      'mass': 'Holy Mass',
+      'wedding': 'Wedding',
+      'baptism': 'Baptism',
+      'funeral': 'Funeral Mass'
+    };
+    return eventMap[eventType] || eventType;
   };
 
   if (loading) {
@@ -260,7 +268,7 @@ const AdminDashboardPage = () => {
           <Card className="border-l-4 border-l-primary shadow-lg">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Parishioners
+                Total Appointments
               </CardTitle>
               <Users className="w-5 h-5 text-primary" />
             </CardHeader>
@@ -268,7 +276,7 @@ const AdminDashboardPage = () => {
               <div className="text-2xl font-bold">{stats.totalParishioners.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                 <TrendingUp className="w-3 h-3 text-green-600" />
-                +12% from last month
+                All time requests
               </p>
             </CardContent>
           </Card>
@@ -282,7 +290,7 @@ const AdminDashboardPage = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stats.upcomingEvents}</div>
-              <p className="text-xs text-muted-foreground">This week</p>
+              <p className="text-xs text-muted-foreground">Posted events</p>
             </CardContent>
           </Card>
 
@@ -302,13 +310,13 @@ const AdminDashboardPage = () => {
           <Card className="border-l-4 border-l-purple-500 shadow-lg">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Active Users Today
+                Active Today
               </CardTitle>
               <UserCheck className="w-5 h-5 text-purple-600" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stats.activeUsersToday}</div>
-              <p className="text-xs text-muted-foreground">Online now</p>
+              <p className="text-xs text-muted-foreground">Portal visitors</p>
             </CardContent>
           </Card>
         </div>
@@ -353,7 +361,7 @@ const AdminDashboardPage = () => {
 
         {/* Recent Activity */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Recent Appointments - NOW WITH REAL DATA */}
+          {/* Recent Appointments - REAL DATA FROM CLIENT FORM */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
@@ -363,7 +371,9 @@ const AdminDashboardPage = () => {
                     <Badge variant="secondary">{stats.pendingAppointments} Pending</Badge>
                   )}
                 </CardTitle>
-                <CardDescription>Latest sacrament requests from parishioners</CardDescription>
+                <CardDescription>
+                  Real appointments from parishioners - {appointments.length} total
+                </CardDescription>
               </div>
               <Button asChild variant="outline" size="sm">
                 <Link href="/a/appointments">
@@ -376,28 +386,48 @@ const AdminDashboardPage = () => {
                 {appointments.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground">
                     <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                    <p>No appointments found</p>
+                    <p>No appointments yet</p>
+                    <p className="text-sm mt-2">Appointments will appear here when parishioners submit forms</p>
                   </div>
                 ) : (
                   appointments.map((appointment) => (
-                    <div key={appointment.id} className="flex items-center justify-between p-4 rounded-lg border bg-card">
+                    <div key={appointment.id} className="flex items-start justify-between p-4 rounded-lg border bg-card hover:shadow-md transition-shadow">
                       <div className="flex items-start gap-3 flex-1">
                         <Avatar className="h-10 w-10">
                           <AvatarFallback>
-                            {appointment.name.split(' ').map(n => n[0]).join('')}
+                            {appointment.fullName.split(' ').map(n => n[0]).join('')}
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
-                            <p className="font-medium truncate">{appointment.name}</p>
+                            <p className="font-medium truncate">{appointment.fullName}</p>
                             {getStatusBadge(appointment.status)}
                           </div>
-                          <p className="text-sm font-medium text-primary">{appointment.eventType}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {formatDate(appointment.preferredDate)} at {formatTime(appointment.preferredTime)}
+                          
+                          <p className="text-sm font-medium text-primary">
+                            {formatEventType(appointment.eventType)}
                           </p>
+                          
+                          <p className="text-sm text-muted-foreground">
+                            {formatDate(appointment.eventDate)} at {appointment.eventTime}
+                          </p>
+                          
+                          <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                            <span className="flex items-center gap-1">
+                              <Mail className="w-3 h-3" />
+                              {appointment.email}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Phone className="w-3 h-3" />
+                              {appointment.phone}
+                            </span>
+                            <span>
+                              {appointment.guestCount} guests
+                            </span>
+                          </div>
+
                           {appointment.message && (
-                            <p className="text-xs text-muted-foreground mt-1 truncate">
+                            <p className="text-xs text-muted-foreground mt-2 p-2 bg-muted/50 rounded">
                               "{appointment.message}"
                             </p>
                           )}
@@ -411,6 +441,7 @@ const AdminDashboardPage = () => {
                             variant="outline"
                             className="h-8 w-8 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
                             onClick={() => handleAppointmentAction(appointment.id, 'approve')}
+                            title="Approve"
                           >
                             <CheckCircle className="w-4 h-4" />
                           </Button>
@@ -419,6 +450,7 @@ const AdminDashboardPage = () => {
                             variant="outline"
                             className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                             onClick={() => handleAppointmentAction(appointment.id, 'reject')}
+                            title="Reject"
                           >
                             <XCircle className="w-4 h-4" />
                           </Button>

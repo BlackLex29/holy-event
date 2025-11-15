@@ -205,7 +205,7 @@ const LoginPage = () => {
                 <CardHeader className="bg-gradient-to-r from-primary to-primary/90 p-6 rounded-t-lg text-primary-foreground">
                     <div className="flex items-center gap-3 mb-2">
                         <Cross2Icon className="w-7 h-7" />
-                        <h1 className="text-2xl font-bold">Grace Fellowship</h1>
+                        <h1 className="text-2xl font-bold">Holy Events</h1>
                     </div>
                     <p className="text-lg opacity-90">Welcome Back</p>
                 </CardHeader>

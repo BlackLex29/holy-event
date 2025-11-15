@@ -1,9 +1,6 @@
-import React from 'react'
+import HolyEventLandingPage from "./holyeventlandingpage/page";
 
-const HolyEventLandingPage = () => {
-  return (
-    <div>Please login to start your schedule</div>
-  )
+
+export default function Home() {
+  return <HolyEventLandingPage />;
 }
-
-export default HolyEventLandingPage

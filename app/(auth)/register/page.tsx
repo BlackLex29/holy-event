@@ -129,7 +129,7 @@ const RegisterPage = () => {
             <CardHeader className="bg-gradient-to-r from-primary to-primary/90 p-8 rounded-t-lg text-primary-foreground">
                 <div className="flex items-center gap-3 mb-3">
                     <Cross2Icon className="w-8 h-8" />
-                    <h1 className="text-3xl font-bold">Grace Fellowship</h1>
+                    <h1 className="text-3xl font-bold">Holy Events</h1>
                 </div>
                 <p className="text-lg opacity-90">Join Our Community</p>
             </CardHeader>
@@ -307,7 +307,7 @@ const RegisterPage = () => {
                             <h2 className="text-2xl font-bold">Terms and Conditions</h2>
                             <div className="space-y-3 text-sm">
                                 <h3 className="font-semibold">
-                                    Grace Fellowship Church Scheduling System
+                                    Holy Events  Church Scheduling System
                                 </h3>
 
                                 <p>
@@ -367,7 +367,7 @@ const RegisterPage = () => {
                                     <strong>7. Modifications</strong>
                                 </p>
                                 <p>
-                                    Grace Fellowship reserves the right to modify these terms at
+                                    Holy Events reserves the right to modify these terms at
                                     any time. Continued use constitutes acceptance of changes.
                                 </p>
                             </div>
