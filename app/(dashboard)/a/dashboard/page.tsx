@@ -304,10 +304,6 @@ const AdminDashboardPage = () => {
                 <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
                 <span>Refresh</span>
               </Button>
-              <Button variant="secondary" size="lg" className="gap-2">
-                <Bell className="w-5 h-5" />
-                <span>{stats.pendingAppointments} Pending</span>
-              </Button>
               <Avatar className="ring-4 ring-background">
                 <AvatarImage src="/admin-avatar.jpg" />
                 <AvatarFallback>FR</AvatarFallback>
@@ -374,42 +370,6 @@ const AdminDashboardPage = () => {
               <p className="text-xs text-muted-foreground">Appointments today</p>
             </CardContent>
           </Card>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="mb-8">
-          <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
-            Quick Actions
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-primary to-primary/80 hover:from-primary/80 hover:to-primary text-primary-foreground shadow-lg">
-              <Link href="/a/users">
-                <Users className="w-8 h-8" />
-                <span className="text-sm">Manage Users</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg">
-              <Link href="/a/appointments">
-                <Calendar className="w-8 h-8" />
-                <span className="text-sm">Manage Appointments</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white shadow-lg">
-              <Link href="/a/events">
-                <PlusCircle className="w-8 h-8" />
-                <span className="text-sm">Post New Event</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" variant="outline" className="h-24 flex flex-col gap-2 border-2 hover:border-primary shadow-lg">
-              <Link href="/a/settings">
-                <Settings className="w-8 h-8" />
-                <span className="text-sm">System Settings</span>
-              </Link>
-            </Button>
-          </div>
         </div>
 
         <Separator className="my-8" />

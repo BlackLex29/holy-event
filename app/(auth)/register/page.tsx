@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -11,15 +12,17 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { Cross2Icon } from '@radix-ui/react-icons';
+import { Church, Calendar } from 'lucide-react';
 import {
     createUserWithEmailAndPassword,
     sendEmailVerification,
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase-config';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, getDocs, query, where, collection } from 'firebase/firestore';
 
 const RegisterPage = () => {
+    const router = useRouter();
+    
     // -----------------------------------------------------------------
     // 1. ENV & ADMIN EMAIL
     // -----------------------------------------------------------------
@@ -33,6 +36,7 @@ const RegisterPage = () => {
     const [showTerms, setShowTerms] = useState(false);
     const [acceptedTerms, setAcceptedTerms] = useState(false);
     const [submitted, setSubmitted] = useState(false);
+    const [checkingEmail, setCheckingEmail] = useState(false);
 
     const [formData, setFormData] = useState({
         fullName: '',
@@ -40,7 +44,7 @@ const RegisterPage = () => {
         email: '',
         password: '',
         address: '',
-        age: '',
+        birthdate: '',
         gender: '',
     });
 
@@ -52,6 +56,34 @@ const RegisterPage = () => {
             ...prev,
             [field]: value,
         }));
+    };
+
+    // Phone number formatting - limit to 11 digits
+    const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value.replace(/\D/g, '').slice(0, 11);
+        handleChange('phoneNumber', value);
+    };
+
+    // Check if email already exists
+    const checkEmailExists = async (email: string): Promise<boolean> => {
+        try {
+            const usersQuery = query(
+                collection(db, 'users'),
+                where('email', '==', email.toLowerCase())
+            );
+            const querySnapshot = await getDocs(usersQuery);
+            return !querySnapshot.empty;
+        } catch (error) {
+            console.error('Error checking email:', error);
+            return false;
+        }
+    };
+
+    // Redirect to login after successful registration
+    const redirectToLogin = () => {
+        setTimeout(() => {
+            router.push('/login');
+        }, 2000); // Redirect after 2 seconds to show success message
     };
 
     // -----------------------------------------------------------------
@@ -66,7 +98,51 @@ const RegisterPage = () => {
             return;
         }
 
+        // Validate phone number
+        if (formData.phoneNumber.length !== 11) {
+            setError('Phone number must be exactly 11 digits');
+            return;
+        }
+
+        // Validate birthdate
+        if (!formData.birthdate) {
+            setError('Please enter your birthdate');
+            return;
+        }
+
+        // Calculate age from birthdate
+        const birthDate = new Date(formData.birthdate);
+        const today = new Date();
+        const age = today.getFullYear() - birthDate.getFullYear();
+        
+        // Check if birthday has occurred this year
+        const hasBirthdayOccurred = 
+            today.getMonth() > birthDate.getMonth() || 
+            (today.getMonth() === birthDate.getMonth() && today.getDate() >= birthDate.getDate());
+        
+        const finalAge = hasBirthdayOccurred ? age : age - 1;
+
+        if (finalAge < 13) {
+            setError('You must be at least 13 years old to register');
+            return;
+        }
+
+        if (finalAge > 120) {
+            setError('Please enter a valid birthdate');
+            return;
+        }
+
         try {
+            setCheckingEmail(true);
+
+            // Check if email already exists
+            const emailExists = await checkEmailExists(formData.email);
+            if (emailExists) {
+                setError('This email is already registered. Please use a different email or sign in.');
+                setCheckingEmail(false);
+                return;
+            }
+
             // 1. Create Firebase Auth user
             const userCredential = await createUserWithEmailAndPassword(
                 auth,
@@ -86,37 +162,43 @@ const RegisterPage = () => {
             // 4. Save profile to Firestore
             await setDoc(doc(db, 'users', userCredential.user.uid), {
                 fullName: formData.fullName,
-                email: formData.email,
+                email: formData.email.toLowerCase(),
                 phoneNumber: formData.phoneNumber,
                 address: formData.address,
-                age: formData.age,
+                birthdate: formData.birthdate,
+                age: finalAge,
                 gender: formData.gender,
                 role,
                 createdAt: new Date().toISOString(),
                 emailVerified: false,
             });
 
-            // 5. UI feedback
+            // 5. UI feedback and redirect
             setSubmitted(true);
+            
+            // Show success message
             alert(
-                'Registration successful! Please check your email to verify your account.'
+                'Registration successful! Please check your email to verify your account. Redirecting to login...'
             );
 
-            setTimeout(() => {
-                setSubmitted(false);
-                setFormData({
-                    fullName: '',
-                    phoneNumber: '',
-                    email: '',
-                    password: '',
-                    address: '',
-                    age: '',
-                    gender: '',
-                });
-                setAcceptedTerms(false);
-            }, 2000);
+            // Redirect to login page after 2 seconds
+            redirectToLogin();
+
         } catch (err: any) {
-            setError(err.message || 'Registration failed');
+            console.error('Registration error:', err);
+            
+            // Handle specific Firebase auth errors
+            if (err.code === 'auth/email-already-in-use') {
+                setError('This email is already registered. Please use a different email or sign in.');
+            } else if (err.code === 'auth/weak-password') {
+                setError('Password is too weak. Please use a stronger password.');
+            } else if (err.code === 'auth/invalid-email') {
+                setError('Invalid email address. Please check your email.');
+            } else {
+                setError(err.message || 'Registration failed. Please try again.');
+            }
+        } finally {
+            setCheckingEmail(false);
         }
     };
 
@@ -128,7 +210,7 @@ const RegisterPage = () => {
             {/* ------------------- Header ------------------- */}
             <CardHeader className="bg-gradient-to-r from-primary to-primary/90 p-8 rounded-t-lg text-primary-foreground">
                 <div className="flex items-center gap-3 mb-3">
-                    <Cross2Icon className="w-8 h-8" />
+                    <Church className="w-8 h-8" />
                     <h1 className="text-3xl font-bold">Holy Events</h1>
                 </div>
                 <p className="text-lg opacity-90">Join Our Community</p>
@@ -164,6 +246,7 @@ const RegisterPage = () => {
                                 value={formData.email}
                                 onChange={(e) => handleChange('email', e.target.value)}
                                 required
+                                disabled={checkingEmail}
                             />
                         </div>
                     </div>
@@ -177,11 +260,15 @@ const RegisterPage = () => {
                             <Input
                                 id="phoneNumber"
                                 type="tel"
-                                placeholder="(555) 123-4567"
+                                placeholder="09123456789"
                                 value={formData.phoneNumber}
-                                onChange={(e) => handleChange('phoneNumber', e.target.value)}
+                                onChange={handlePhoneChange}
                                 required
+                                maxLength={11}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Format: 09XXXXXXXXX (11 digits)
+                            </p>
                         </div>
 
                         <div className="space-y-2">
@@ -195,7 +282,11 @@ const RegisterPage = () => {
                                 value={formData.password}
                                 onChange={(e) => handleChange('password', e.target.value)}
                                 required
+                                minLength={6}
                             />
+                            <p className="text-xs text-muted-foreground">
+                                Minimum 6 characters
+                            </p>
                         </div>
                     </div>
 
@@ -214,22 +305,26 @@ const RegisterPage = () => {
                         />
                     </div>
 
-                    {/* ---- Age & Gender ---- */}
+                    {/* ---- Birthdate & Gender ---- */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div className="space-y-2">
-                            <label htmlFor="age" className="block text-sm font-medium">
-                                Age *
+                            <label htmlFor="birthdate" className="block text-sm font-medium">
+                                Birthdate *
                             </label>
-                            <Input
-                                id="age"
-                                type="number"
-                                placeholder="25"
-                                value={formData.age}
-                                onChange={(e) => handleChange('age', e.target.value)}
-                                required
-                                min="13"
-                                max="120"
-                            />
+                            <div className="relative">
+                                <Input
+                                    id="birthdate"
+                                    type="date"
+                                    value={formData.birthdate}
+                                    onChange={(e) => handleChange('birthdate', e.target.value)}
+                                    required
+                                    max={new Date().toISOString().split('T')[0]}
+                                />
+                                <Calendar className="absolute right-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4 pointer-events-none" />
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                                Must be 13 years or older
+                            </p>
                         </div>
 
                         <div className="space-y-2">
@@ -255,8 +350,15 @@ const RegisterPage = () => {
 
                     {/* ---- Error Message ---- */}
                     {error && (
-                        <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded">
+                        <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
                             {error}
+                        </div>
+                    )}
+
+                    {/* ---- Success Message ---- */}
+                    {submitted && (
+                        <div className="p-3 bg-green-100 border border-green-300 text-green-700 rounded text-sm">
+                            ✅ Registration successful! Redirecting to login...
                         </div>
                     )}
 
@@ -284,8 +386,21 @@ const RegisterPage = () => {
 
                     {/* ---- Submit Button ---- */}
                     <div className="pt-4">
-                        <Button type="submit" className="w-full" disabled={submitted}>
-                            {submitted ? 'Welcome!' : 'Join Fellowship'}
+                        <Button 
+                            type="submit" 
+                            className="w-full" 
+                            disabled={submitted || checkingEmail}
+                        >
+                            {checkingEmail ? (
+                                <>
+                                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
+                                    Checking...
+                                </>
+                            ) : submitted ? (
+                                'Redirecting...'
+                            ) : (
+                                'Join Fellowship'
+                            )}
                         </Button>
                     </div>
 
@@ -307,7 +422,7 @@ const RegisterPage = () => {
                             <h2 className="text-2xl font-bold">Terms and Conditions</h2>
                             <div className="space-y-3 text-sm">
                                 <h3 className="font-semibold">
-                                    Holy Events  Church Scheduling System
+                                    Holy Events Church Scheduling System
                                 </h3>
 
                                 <p>

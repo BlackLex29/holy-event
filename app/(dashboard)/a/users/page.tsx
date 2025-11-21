@@ -41,9 +41,9 @@ import {
   Edit,
   Trash2,
   RefreshCw,
-  Filter,
   Eye,
-  Users
+  Users,
+  AlertCircle
 } from 'lucide-react';
 import { 
   collection, 
@@ -53,7 +53,6 @@ import {
   deleteDoc, 
   doc,
   updateDoc,
-  where,
   Timestamp 
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase-config';
@@ -68,9 +67,12 @@ interface UserData {
   joinDate: string;
   lastLogin?: string;
   address?: string;
-  dateOfBirth?: string;
+  birthday?: string;
+  age?: number;
+  gender?: string;
   parishionerId?: string;
   createdAt: Timestamp | Date | string;
+  emailVerified?: boolean;
 }
 
 export default function ManageUsersPage() {
@@ -83,12 +85,14 @@ export default function ManageUsersPage() {
   const [selectedUser, setSelectedUser] = useState<UserData | null>(null);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<string>('');
   const { toast } = useToast();
 
   // Load users from Firestore
   const loadUsers = async () => {
     try {
       setLoading(true);
+      setDebugInfo('Starting to load users from Firestore...');
       console.log('📥 Loading users from Firestore...');
 
       const usersQuery = query(
@@ -98,92 +102,90 @@ export default function ManageUsersPage() {
 
       const querySnapshot = await getDocs(usersQuery);
       console.log('📊 Users query snapshot size:', querySnapshot.size);
+      setDebugInfo(`Found ${querySnapshot.size} users in Firestore`);
 
-      const usersData: UserData[] = querySnapshot.docs.map(doc => {
+      const usersData: UserData[] = [];
+      
+      querySnapshot.forEach((doc) => {
         const data = doc.data();
         console.log('👤 User data:', doc.id, data);
         
-        return {
+        // Handle different date formats
+        let joinDate = '';
+        if (data.createdAt) {
+          if (data.createdAt.toDate) {
+            joinDate = data.createdAt.toDate().toISOString().split('T')[0];
+          } else if (data.createdAt instanceof Date) {
+            joinDate = data.createdAt.toISOString().split('T')[0];
+          } else if (typeof data.createdAt === 'string') {
+            joinDate = data.createdAt.split('T')[0];
+          }
+        } else {
+          joinDate = new Date().toISOString().split('T')[0];
+        }
+
+        const user: UserData = {
           id: doc.id,
-          fullName: data.fullName || 'Unknown',
-          email: data.email || 'No email',
-          phone: data.phone || 'No phone',
+          fullName: data.fullName || data.name || data.displayName || 'Unknown User',
+          email: data.email || 'No email provided',
+          phone: data.phone || data.phoneNumber || 'No phone provided',
           role: data.role || 'parishioner',
           status: data.status || 'active',
-          joinDate: data.joinDate || new Date().toISOString(),
-          lastLogin: data.lastLogin,
-          address: data.address,
-          dateOfBirth: data.dateOfBirth,
-          parishionerId: data.parishionerId,
+          joinDate: joinDate,
+          birthday: data.birthday || data.birthDate,
+          age: data.age,
+          gender: data.gender,
+          address: data.address || data.location,
+          parishionerId: data.parishionerId || data.userId || `P-${new Date().getFullYear()}-${doc.id.slice(-5).toUpperCase()}`,
           createdAt: data.createdAt || new Date(),
+          emailVerified: data.emailVerified || false,
+          lastLogin: data.lastLogin || data.lastSignInTime
         };
+        
+        usersData.push(user);
       });
 
-      console.log('✅ Loaded users:', usersData.length);
+      console.log('✅ Loaded users:', usersData);
       setUsers(usersData);
       setFilteredUsers(usersData);
 
-    } catch (error) {
+      if (usersData.length === 0) {
+        setDebugInfo('No users found in Firestore collection');
+        toast({
+          title: 'No Users Found',
+          description: 'No users have registered in the system yet. Users will appear here after they register.',
+          variant: 'default',
+        });
+      } else {
+        setDebugInfo(`Successfully loaded ${usersData.length} users`);
+      }
+
+    } catch (error: any) {
       console.error('❌ Error loading users from Firestore:', error);
+      setDebugInfo(`Error: ${error.message}`);
       toast({
-        title: 'Error',
-        description: 'Failed to load users. Please try again.',
+        title: 'Error Loading Users',
+        description: `Failed to load users: ${error.message}`,
         variant: 'destructive',
       });
-      
-      // Fallback to mock data for demonstration
-      setUsers(getMockUsers());
-      setFilteredUsers(getMockUsers());
     } finally {
       setLoading(false);
     }
   };
 
-  // Mock data for demonstration
-  const getMockUsers = (): UserData[] => [
-    {
-      id: '1',
-      fullName: 'Maria Santos',
-      email: 'maria.santos@email.com',
-      phone: '+639171234567',
-      role: 'parishioner',
-      status: 'active',
-      joinDate: '2024-01-15',
-      parishionerId: 'P-2024-00123',
-      createdAt: new Date('2024-01-15'),
-    },
-    {
-      id: '2',
-      fullName: 'Juan Dela Cruz',
-      email: 'juan.delacruz@email.com',
-      phone: '+639181234568',
-      role: 'parishioner',
-      status: 'active',
-      joinDate: '2024-02-20',
-      parishionerId: 'P-2024-00124',
-      createdAt: new Date('2024-02-20'),
-    },
-    {
-      id: '3',
-      fullName: 'Fr. Michael Santos',
-      email: 'fr.michael@staugustine.ph',
-      phone: '+639271234569',
-      role: 'priest',
-      status: 'active',
-      joinDate: '2023-05-10',
-      createdAt: new Date('2023-05-10'),
-    },
-    {
-      id: '4',
-      fullName: 'Admin User',
-      email: 'admin@staugustine.ph',
-      phone: '+639281234570',
-      role: 'admin',
-      status: 'active',
-      joinDate: '2023-12-01',
-      createdAt: new Date('2023-12-01'),
-    },
-  ];
+  // Helper function to format Firebase timestamp
+  const formatFirebaseDate = (timestamp: any): string => {
+    if (timestamp && typeof timestamp.toDate === 'function') {
+      return timestamp.toDate().toISOString().split('T')[0];
+    }
+    if (timestamp instanceof Date) {
+      return timestamp.toISOString().split('T')[0];
+    }
+    if (typeof timestamp === 'string') {
+      return timestamp.split('T')[0];
+    }
+    return new Date().toISOString().split('T')[0];
+  };
 
   useEffect(() => {
     loadUsers();
@@ -289,29 +291,55 @@ export default function ManageUsersPage() {
     }
   };
 
-  const getRoleBadge = (role: string) => {
-    const variants = {
-      parishioner: 'default',
-      admin: 'destructive',
-      priest: 'secondary',
-    } as const;
+  const handleRoleChange = async (user: UserData, newRole: 'parishioner' | 'admin' | 'priest') => {
+    try {
+      // Update in Firestore
+      await updateDoc(doc(db, 'users', user.id), {
+        role: newRole,
+        updatedAt: new Date(),
+      });
 
+      // Update local state
+      setUsers(users.map(u => 
+        u.id === user.id ? { ...u, role: newRole } : u
+      ));
+
+      toast({
+        title: 'Role Updated',
+        description: `${user.fullName} is now ${newRole}.`,
+      });
+    } catch (error) {
+      console.error('❌ Error updating user role:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to update user role. Please try again.',
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const getRoleBadge = (role: string) => {
     const colors = {
-      parishioner: 'bg-blue-100 text-blue-800',
-      admin: 'bg-red-100 text-red-800',
-      priest: 'bg-purple-100 text-purple-800',
+      parishioner: 'bg-blue-100 text-blue-800 border-blue-200',
+      admin: 'bg-red-100 text-red-800 border-red-200',
+      priest: 'bg-purple-100 text-purple-800 border-purple-200',
     };
 
     return (
-      <Badge variant={variants[role as keyof typeof variants]} className={colors[role as keyof typeof colors]}>
+      <Badge variant="outline" className={colors[role as keyof typeof colors]}>
         {role.charAt(0).toUpperCase() + role.slice(1)}
       </Badge>
     );
   };
 
   const getStatusBadge = (status: string) => {
+    const colors = {
+      active: 'bg-green-100 text-green-800 border-green-200',
+      inactive: 'bg-gray-100 text-gray-800 border-gray-200',
+    };
+
     return (
-      <Badge variant={status === 'active' ? 'default' : 'secondary'}>
+      <Badge variant="outline" className={colors[status as keyof typeof colors]}>
         {status.charAt(0).toUpperCase() + status.slice(1)}
       </Badge>
     );
@@ -319,13 +347,21 @@ export default function ManageUsersPage() {
 
   const formatDate = (dateString: string | Date | Timestamp) => {
     if (dateString instanceof Timestamp) {
-      return dateString.toDate().toLocaleDateString('en-US');
+      return dateString.toDate().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
     }
-    return new Date(dateString as string).toLocaleDateString('en-US');
+    return new Date(dateString as string).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
   };
 
   const getInitials = (name: string) => {
-    return name.split(' ').map(n => n[0]).join('').toUpperCase();
+    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   };
 
   return (
@@ -341,10 +377,19 @@ export default function ManageUsersPage() {
             View and manage all parish users and their accounts.
           </p>
         </div>
-        <Button onClick={loadUsers} disabled={loading} className="gap-2">
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </Button>
+        <div className="flex flex-col gap-2">
+          <Button onClick={loadUsers} disabled={loading} className="gap-2">
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
+          {/* Debug Info - Only show in development */}
+          {process.env.NODE_ENV === 'development' && debugInfo && (
+            <div className="text-xs text-muted-foreground bg-muted p-2 rounded">
+              <AlertCircle className="w-3 h-3 inline mr-1" />
+              {debugInfo}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -356,6 +401,7 @@ export default function ManageUsersPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{users.length}</div>
+            <p className="text-xs text-muted-foreground">Registered in system</p>
           </CardContent>
         </Card>
         <Card>
@@ -367,6 +413,7 @@ export default function ManageUsersPage() {
             <div className="text-2xl font-bold">
               {users.filter(u => u.role === 'parishioner').length}
             </div>
+            <p className="text-xs text-muted-foreground">Community members</p>
           </CardContent>
         </Card>
         <Card>
@@ -378,6 +425,7 @@ export default function ManageUsersPage() {
             <div className="text-2xl font-bold">
               {users.filter(u => u.role === 'priest').length}
             </div>
+            <p className="text-xs text-muted-foreground">Clergy members</p>
           </CardContent>
         </Card>
         <Card>
@@ -389,6 +437,7 @@ export default function ManageUsersPage() {
             <div className="text-2xl font-bold">
               {users.filter(u => u.role === 'admin').length}
             </div>
+            <p className="text-xs text-muted-foreground">System administrators</p>
           </CardContent>
         </Card>
       </div>
@@ -398,7 +447,7 @@ export default function ManageUsersPage() {
         <CardHeader>
           <CardTitle>User Management</CardTitle>
           <CardDescription>
-            Search, filter, and manage all users in the system.
+            Search, filter, and manage all users in the system. {users.length === 0 && 'No users found - users will appear here after they register.'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -455,7 +504,8 @@ export default function ManageUsersPage() {
                       <div className="flex justify-center">
                         <RefreshCw className="w-6 h-6 animate-spin" />
                       </div>
-                      <p className="text-muted-foreground mt-2">Loading users...</p>
+                      <p className="text-muted-foreground mt-2">Loading users from database...</p>
+                      <p className="text-sm text-muted-foreground">Checking Firestore collection...</p>
                     </TableCell>
                   </TableRow>
                 ) : filteredUsers.length === 0 ? (
@@ -467,16 +517,25 @@ export default function ManageUsersPage() {
                         <p className="text-sm text-muted-foreground mt-1">
                           Try adjusting your search or filters
                         </p>
-                      ) : null}
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-sm text-muted-foreground">
+                            No users have registered in the system yet
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Users will appear here after they complete registration
+                          </p>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ) : (
                   filteredUsers.map((user) => (
-                    <TableRow key={user.id}>
+                    <TableRow key={user.id} className="hover:bg-muted/50">
                       <TableCell>
                         <div className="flex items-center gap-3">
                           <Avatar>
-                            <AvatarFallback>
+                            <AvatarFallback className="bg-primary/10 text-primary">
                               {getInitials(user.fullName)}
                             </AvatarFallback>
                           </Avatar>
@@ -502,7 +561,29 @@ export default function ManageUsersPage() {
                           </div>
                         </div>
                       </TableCell>
-                      <TableCell>{getRoleBadge(user.role)}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1">
+                          {getRoleBadge(user.role)}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-6 text-xs">
+                                Change Role
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent>
+                              <DropdownMenuItem onClick={() => handleRoleChange(user, 'parishioner')}>
+                                Parishioner
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleRoleChange(user, 'priest')}>
+                                Priest
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => handleRoleChange(user, 'admin')}>
+                                Admin
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-2">
                           {getStatusBadge(user.status)}
@@ -591,53 +672,75 @@ export default function ManageUsersPage() {
                     {getRoleBadge(selectedUser.role)}
                     {getStatusBadge(selectedUser.status)}
                   </div>
+                  {selectedUser.parishionerId && (
+                    <p className="text-sm text-muted-foreground mt-1">
+                      ID: {selectedUser.parishionerId}
+                    </p>
+                  )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Email</label>
-                    <p className="flex items-center gap-2">
-                      <Mail className="w-4 h-4" />
-                      {selectedUser.email}
-                    </p>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Phone</label>
-                    <p className="flex items-center gap-2">
-                      <Phone className="w-4 h-4" />
-                      {selectedUser.phone}
-                    </p>
-                  </div>
-                  {selectedUser.parishionerId && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <h4 className="font-semibold">Contact Information</h4>
+                  <div className="space-y-3">
                     <div>
-                      <label className="text-sm font-medium text-muted-foreground">Parishioner ID</label>
-                      <p>{selectedUser.parishionerId}</p>
+                      <label className="text-sm font-medium text-muted-foreground">Email</label>
+                      <p className="flex items-center gap-2 mt-1">
+                        <Mail className="w-4 h-4" />
+                        {selectedUser.email}
+                        {selectedUser.emailVerified && (
+                          <Badge variant="outline" className="bg-green-100 text-green-800 text-xs">
+                            Verified
+                          </Badge>
+                        )}
+                      </p>
                     </div>
-                  )}
+                    <div>
+                      <label className="text-sm font-medium text-muted-foreground">Phone</label>
+                      <p className="flex items-center gap-2 mt-1">
+                        <Phone className="w-4 h-4" />
+                        {selectedUser.phone}
+                      </p>
+                    </div>
+                    {selectedUser.address && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Address</label>
+                        <p className="mt-1">{selectedUser.address}</p>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <label className="text-sm font-medium text-muted-foreground">Join Date</label>
-                    <p className="flex items-center gap-2">
-                      <Calendar className="w-4 h-4" />
-                      {formatDate(selectedUser.joinDate)}
-                    </p>
+                <div className="space-y-4">
+                  <h4 className="font-semibold">Profile Information</h4>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-sm font-medium text-muted-foreground">Join Date</label>
+                      <p className="flex items-center gap-2 mt-1">
+                        <Calendar className="w-4 h-4" />
+                        {formatDate(selectedUser.joinDate)}
+                      </p>
+                    </div>
+                    {selectedUser.birthday && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Birthday</label>
+                        <p>{formatDate(selectedUser.birthday)}</p>
+                      </div>
+                    )}
+                    {selectedUser.age && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Age</label>
+                        <p>{selectedUser.age} years old</p>
+                      </div>
+                    )}
+                    {selectedUser.gender && (
+                      <div>
+                        <label className="text-sm font-medium text-muted-foreground">Gender</label>
+                        <p className="capitalize">{selectedUser.gender}</p>
+                      </div>
+                    )}
                   </div>
-                  {selectedUser.dateOfBirth && (
-                    <div>
-                      <label className="text-sm font-medium text-muted-foreground">Date of Birth</label>
-                      <p>{formatDate(selectedUser.dateOfBirth)}</p>
-                    </div>
-                  )}
-                  {selectedUser.address && (
-                    <div>
-                      <label className="text-sm font-medium text-muted-foreground">Address</label>
-                      <p>{selectedUser.address}</p>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>

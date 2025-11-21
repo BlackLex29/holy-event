@@ -9,12 +9,42 @@ import {
   MapPin,
   Clock,
   Phone,
-  Navigation
+  Navigation,
+  MousePointerClick,
+  Move,
+  Maximize2,
+  ExternalLink
 } from 'lucide-react';
 import Image from 'next/image';
 
 export default function VisualTourPage() {
   const [activeTab, setActiveTab] = useState('virtual');
+  const [selectedVirtualTour, setSelectedVirtualTour] = useState(0);
+
+  // Add your 360° tour links here
+  const virtualTours = [
+    {
+      id: 1,
+      name: 'Main Sanctuary',
+      description: 'Experience the beauty of our main sanctuary in full 360°',
+      embedUrl: 'https://momento360.com/e/u/97a7fa765a53490a8d6030ff26e7134a?utm_campaign=embed&utm_source=other&heading=0&pitch=0&field-of-view=75&size=medium&display-plan=true',
+      thumbnail: '/1.jpg'
+    },
+    {
+      id: 2,
+      name: 'Chapel Area',
+      description: 'Explore our peaceful chapel in 360° view',
+      embedUrl: 'https://momento360.com/e/u/97a7fa765a53490a8d6030ff26e7134a?utm_campaign=embed&utm_source=other&heading=90&pitch=0&field-of-view=75&size=medium&display-plan=true',
+      thumbnail: '/2.jpg'
+    },
+    {
+      id: 3,
+      name: 'Parish Hall',
+      description: 'Virtual tour of our community gathering space',
+      embedUrl: 'https://momento360.com/e/u/97a7fa765a53490a8d6030ff26e7134a?utm_campaign=embed&utm_source=other&heading=180&pitch=0&field-of-view=75&size=medium&display-plan=true',
+      thumbnail: '/3.jpg'
+    }
+  ];
 
   const churchSpots = [
     {
@@ -72,19 +102,19 @@ export default function VisualTourPage() {
                 <MapPin className="h-16 w-16" />
               </div>
             </div>
-            <h1 className="text-4xl md:text-6xl font-bold mb-6">Saint Augustine Parish Visual Tour</h1>
+            <h1 className="text-4xl md:text-6xl font-bold mb-6">Visual Tour</h1>
             <p className="text-xl md:text-2xl opacity-90 mb-8 leading-relaxed">
               Explore Saint Augustine Parish from anywhere in the world
             </p>
             <div className="flex flex-wrap justify-center gap-3">
               <Badge variant="secondary" className="text-lg px-4 py-2">
-                360° Virtual View
+                360° Virtual Reality
               </Badge>
               <Badge variant="secondary" className="text-lg px-4 py-2">
-                Interactive Map
+                Interactive Navigation
               </Badge>
               <Badge variant="secondary" className="text-lg px-4 py-2">
-                Photo Gallery
+                Full Panorama
               </Badge>
             </div>
           </div>
@@ -103,7 +133,7 @@ export default function VisualTourPage() {
                 className="gap-2"
               >
                 <Navigation className="w-4 h-4" />
-                Virtual View
+                360° Virtual Tour
               </Button>
               <Button
                 variant={activeTab === 'map' ? 'default' : 'outline'}
@@ -111,7 +141,7 @@ export default function VisualTourPage() {
                 className="gap-2"
               >
                 <MapPin className="w-4 h-4" />
-                Interactive Map
+                Location Map
               </Button>
               <Button
                 variant={activeTab === 'gallery' ? 'default' : 'outline'}
@@ -130,44 +160,117 @@ export default function VisualTourPage() {
                   <CardHeader className="text-center">
                     <CardTitle className="text-3xl flex items-center justify-center gap-3">
                       <Navigation className="w-8 h-8" />
-                      360° Virtual View
+                      360° Virtual Experience
                     </CardTitle>
                     <CardDescription className="text-lg">
-                      Take an immersive virtual walk through Saint Augustine Parish
+                      Drag to look around • Click hotspots to navigate • Full immersive experience
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <div className="rounded-2xl overflow-hidden shadow-lg mb-6">
-                      <div className="relative h-96 w-full">
-                        <Image
-                          src="/Virtualview.jpg"
-                          alt="Saint Augustine Parish Virtual Tour"
-                          fill
-                          className="object-cover"
-                          priority
+                    {/* 360° Viewer */}
+                    <div className="rounded-2xl overflow-hidden shadow-2xl mb-6">
+                      <div className="relative w-full" style={{ paddingTop: '56.25%' }}>
+                        <iframe
+                          src={virtualTours[selectedVirtualTour].embedUrl}
+                          className="absolute top-0 left-0 w-full h-full border-0"
+                          allowFullScreen
+                          allow="accelerometer; gyroscope; vr"
+                          title={virtualTours[selectedVirtualTour].name}
                         />
-                        <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
-                          <div className="text-center text-white bg-black/50 p-6 rounded-lg backdrop-blur-sm">
-                            <Church className="h-12 w-12 mx-auto mb-3" />
-                            <p className="text-lg font-semibold">Saint Augustine Parish</p>
-                            <p className="text-sm opacity-90">360° Virtual Experience</p>
-                          </div>
+                      </div>
+                    </div>
+
+                    {/* Tour Selection */}
+                    <div className="mb-6">
+                      <h3 className="font-bold text-lg mb-4 flex items-center gap-2">
+                        <Maximize2 className="w-5 h-5" />
+                        Select a location to explore:
+                      </h3>
+                      <div className="grid md:grid-cols-3 gap-4">
+                        {virtualTours.map((tour, index) => (
+                          <Card 
+                            key={tour.id} 
+                            className={`cursor-pointer transition-all hover:shadow-lg ${
+                              selectedVirtualTour === index ? 'ring-2 ring-primary' : ''
+                            }`}
+                            onClick={() => setSelectedVirtualTour(index)}
+                          >
+                            <div 
+                              className="h-32 bg-cover bg-center rounded-t-lg relative"
+                              style={{ backgroundImage: `url(${tour.thumbnail})` }}
+                            >
+                              {selectedVirtualTour === index && (
+                                <div className="absolute inset-0 bg-primary/20 flex items-center justify-center">
+                                  <Badge className="bg-primary text-primary-foreground">
+                                    Currently Viewing
+                                  </Badge>
+                                </div>
+                              )}
+                            </div>
+                            <CardContent className="p-4">
+                              <h4 className="font-bold mb-1">{tour.name}</h4>
+                              <p className="text-xs text-muted-foreground">{tour.description}</p>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Feature Cards */}
+                    <div className="grid md:grid-cols-3 gap-4 text-center mb-6">
+                      <div className="p-4 bg-primary/10 rounded-lg border-2 border-primary/20">
+                        <Move className="w-8 h-8 mx-auto mb-2 text-primary" />
+                        <p className="font-semibold">Drag to Look Around</p>
+                        <p className="text-sm text-muted-foreground">Click and drag to explore 360°</p>
+                      </div>
+                      <div className="p-4 bg-primary/10 rounded-lg border-2 border-primary/20">
+                        <MousePointerClick className="w-8 h-8 mx-auto mb-2 text-primary" />
+                        <p className="font-semibold">Interactive Hotspots</p>
+                        <p className="text-sm text-muted-foreground">Click markers to navigate</p>
+                      </div>
+                      <div className="p-4 bg-primary/10 rounded-lg border-2 border-primary/20">
+                        <Maximize2 className="w-8 h-8 mx-auto mb-2 text-primary" />
+                        <p className="font-semibold">Fullscreen Mode</p>
+                        <p className="text-sm text-muted-foreground">Click fullscreen icon inside</p>
+                      </div>
+                    </div>
+
+                    {/* Controls Info */}
+                    <div className="p-4 bg-muted rounded-lg">
+                      <h3 className="font-bold mb-3 flex items-center gap-2">
+                        <MousePointerClick className="w-5 h-5" />
+                        How to Navigate the 360° Tour:
+                      </h3>
+                      <div className="grid md:grid-cols-2 gap-4 text-sm">
+                        <div>
+                          <p className="font-semibold mb-2">🖱️ Desktop Controls:</p>
+                          <ul className="space-y-1 text-muted-foreground">
+                            <li>• Click & drag to look around</li>
+                            <li>• Scroll to zoom in/out</li>
+                            <li>• Click hotspots to move locations</li>
+                            <li>• Double-click for fullscreen</li>
+                          </ul>
+                        </div>
+                        <div>
+                          <p className="font-semibold mb-2">📱 Mobile/VR Controls:</p>
+                          <ul className="space-y-1 text-muted-foreground">
+                            <li>• Swipe to look around</li>
+                            <li>• Pinch to zoom</li>
+                            <li>• Tap hotspots to navigate</li>
+                            <li>• Use VR mode with headset</li>
+                          </ul>
                         </div>
                       </div>
                     </div>
-                    <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 text-center">
-                      <div className="p-4 bg-primary/10 rounded-lg">
-                        <p className="font-semibold">Full 360° View</p>
-                        <p className="text-sm text-muted-foreground">Explore every angle of Saint Augustine</p>
-                      </div>
-                      <div className="p-4 bg-primary/10 rounded-lg">
-                        <p className="font-semibold">Interactive Hotspots</p>
-                        <p className="text-sm text-muted-foreground">Click to learn more about Saint Augustine</p>
-                      </div>
-                      <div className="p-4 bg-primary/10 rounded-lg">
-                        <p className="font-semibold">Guided Navigation</p>
-                        <p className="text-sm text-muted-foreground">Easy to use tour of Saint Augustine</p>
-                      </div>
+
+                    {/* External Link */}
+                    <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <p className="text-sm text-blue-800 flex items-center gap-2">
+                        <ExternalLink className="w-4 h-4" />
+                        <span>
+                          <strong>Tip:</strong> For the best experience, click the fullscreen button inside the viewer or open in a new tab
+                        </span>
+                      </p>
                     </div>
                   </CardContent>
                 </Card>
@@ -181,10 +284,10 @@ export default function VisualTourPage() {
                   <CardHeader className="text-center">
                     <CardTitle className="text-3xl flex items-center justify-center gap-3">
                       <MapPin className="w-8 h-8" />
-                      Saint Augustine Parish Map
+                      Parish Map
                     </CardTitle>
                     <CardDescription className="text-lg">
-                      Find your way around Saint Augustine Parish campus
+                      Find your way around the campus
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -202,11 +305,11 @@ export default function VisualTourPage() {
                     </div>
                     <div className="grid md:grid-cols-2 gap-6">
                       <div className="space-y-4">
-                        <h3 className="font-bold text-lg">Saint Augustine Location Details</h3>
+                        <h3 className="font-bold text-lg">Location Details</h3>
                         <div className="space-y-2">
                           <p className="flex items-center gap-2">
                             <MapPin className="w-4 h-4 text-primary" />
-                            <span>123 Saint Augustine Street, Manila</span>
+                            <span>123 Church Street, Manila</span>
                           </p>
                           <p className="flex items-center gap-2">
                             <Clock className="w-4 h-4 text-primary" />
@@ -219,12 +322,12 @@ export default function VisualTourPage() {
                         </div>
                       </div>
                       <div className="space-y-4">
-                        <h3 className="font-bold text-lg">Getting to Saint Augustine</h3>
+                        <h3 className="font-bold text-lg">Getting Here</h3>
                         <div className="space-y-2 text-sm">
-                          <p>🚗 Ample parking available at Saint Augustine</p>
-                          <p>🚌 Bus routes: 12, 45, 67 (Saint Augustine stop)</p>
+                          <p>🚗 Ample parking available</p>
+                          <p>🚌 Bus routes: 12, 45, 67</p>
                           <p>🚇 Nearest MRT: Faith Station</p>
-                          <p>♿ Saint Augustine is wheelchair accessible</p>
+                          <p>♿ Wheelchair accessible</p>
                         </div>
                       </div>
                     </div>
@@ -240,10 +343,10 @@ export default function VisualTourPage() {
                   <CardHeader className="text-center">
                     <CardTitle className="text-3xl flex items-center justify-center gap-3">
                       <Church className="w-8 h-8" />
-                      Saint Augustine Photo Gallery
+                      Photo Gallery
                     </CardTitle>
                     <CardDescription className="text-lg">
-                      Explore Saint Augustine Parish through beautiful photographs
+                      Explore through beautiful photographs
                     </CardDescription>
                   </CardHeader>
                   <CardContent>

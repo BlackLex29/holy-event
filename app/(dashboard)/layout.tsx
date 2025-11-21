@@ -61,21 +61,19 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
             </div>
         );
     }
-
     return (
-        <SidebarProvider
-        >
-            <AppSidebar />
-            <SidebarInset>
-                <header className="flex h-14 items-center gap-4 border-b bg-background px-4 sticky top-0 z-10">
-                    <SidebarTrigger />
-                </header>
-                <main className="p-6">
-                    {children}
-                </main>
-            </SidebarInset>
-        </SidebarProvider>
-    );
+    <SidebarProvider>
+        <AppSidebar />
+        <SidebarInset>
+            <header className="flex h-14 items-center gap-4 border-b bg-background px-4 sticky top-0 z-10">
+                <SidebarTrigger className="[&_svg]:hidden after:content-['Menu'] after:text-sm after:font-medium" />
+            </header>
+            <main className="p-6">
+                {children}
+            </main>
+        </SidebarInset>
+    </SidebarProvider>
+);
 };
 
 export default DashboardLayout;

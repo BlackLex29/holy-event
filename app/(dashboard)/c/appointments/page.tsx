@@ -66,14 +66,19 @@ const formSchema = z.object({
   eventType: z.string().min(1, 'Please select an event type'),
   fullName: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Invalid email address'),
-  phone: z.string().min(10, 'Phone number is required'),
+  phone: z.string()
+    .min(11, 'Phone number must be exactly 11 digits')
+    .max(11, 'Phone number must be exactly 11 digits')
+    .regex(/^09\d{9}$/, 'Phone number must start with 09 and contain exactly 11 digits'),
   eventDate: z.date().refine(
     (date) => date && date >= new Date(),
     { message: 'Please select a valid future date' }
   ),
   eventTime: z.string().min(1, 'Please select a time'),
   guestCount: z.string().min(1, 'Please enter number of guests'),
-  message: z.string().optional(),
+  message: z.string()
+    .max(50, 'Additional notes cannot exceed 50 characters')
+    .optional(),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -208,6 +213,7 @@ export default function EventAppointmentPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
   const [successData, setSuccessData] = useState<{name: string; eventType: string; date: string; time: string} | null>(null);
+  const [notesCount, setNotesCount] = useState(0);
 
   const {
     register,
@@ -216,6 +222,7 @@ export default function EventAppointmentPage() {
     control,
     reset,
     trigger,
+    watch,
     formState: { errors },
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -227,6 +234,12 @@ export default function EventAppointmentPage() {
 
   const eventType = useWatch({ control, name: 'eventType' });
   const eventTime = useWatch({ control, name: 'eventTime' });
+  const message = watch('message');
+
+  // Watch for message changes to update character count
+  useEffect(() => {
+    setNotesCount(message?.length || 0);
+  }, [message]);
 
   // Auto-clear time when event type changes
   useEffect(() => {
@@ -263,6 +276,24 @@ export default function EventAppointmentPage() {
     }
   }, [eventType, date, setValue, trigger, toast]);
 
+  // Phone number formatting
+  const formatPhoneNumber = (value: string) => {
+    // Remove all non-digit characters
+    const numbers = value.replace(/\D/g, '');
+    
+    // Limit to 11 digits
+    if (numbers.length <= 11) {
+      return numbers;
+    }
+    return numbers.slice(0, 11);
+  };
+
+  // Handle phone number input
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const formatted = formatPhoneNumber(e.target.value);
+    setValue('phone', formatted, { shouldValidate: true });
+  };
+
   // SUBMIT TO FIREBASE WITH SUCCESS MESSAGE
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
@@ -281,9 +312,9 @@ export default function EventAppointmentPage() {
         updatedAt: serverTimestamp(),
       };
 
-      // Add message only if it exists
+      // Add message only if it exists and trim to 50 characters
       if (data.message && data.message.trim() !== '') {
-        appointmentData.message = data.message.trim();
+        appointmentData.message = data.message.trim().substring(0, 50);
       }
 
       console.log('📤 Submitting appointment to Firestore:', appointmentData);
@@ -320,6 +351,7 @@ export default function EventAppointmentPage() {
       // Reset form
       reset();
       setDate(undefined);
+      setNotesCount(0);
 
       // Hide success message after 8 seconds
       setTimeout(() => {
@@ -364,6 +396,7 @@ export default function EventAppointmentPage() {
         // Reset form
         reset();
         setDate(undefined);
+        setNotesCount(0);
 
         // Hide success message after 8 seconds
         setTimeout(() => {
@@ -505,14 +538,14 @@ export default function EventAppointmentPage() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-2xl">Book Your Appointment</CardTitle>
-<CardDescription>
-  Select event, date, and approved time slot.
-  <span className="font-bold block mt-1">
-    Note: After setting an appointment, complete all the required documents and submit them to the
-    church at least one (1) month before the chosen date of the service.
-  </span>
-  {eventType === 'baptism' && ' Baptism is available every Sunday only.'}
-</CardDescription>
+                <CardDescription>
+                  Select event, date, and approved time slot.
+                  <span className="font-bold block mt-1">
+                    Note: After setting an appointment, complete all the required documents and submit them to the
+                    church at least one (1) month before the chosen date of the service.
+                  </span>
+                  {eventType === 'baptism' && ' Baptism is available every Sunday only.'}
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
@@ -572,11 +605,17 @@ export default function EventAppointmentPage() {
                       <Label>Phone Number *</Label>
                       <Input 
                         {...register('phone')} 
-                        placeholder="+63 912 345 6789" 
-                        disabled={isSubmitting} 
+                        placeholder="09123456789" 
+                        disabled={isSubmitting}
+                        onChange={handlePhoneChange}
+                        maxLength={11}
                       />
-                      {errors.phone && (
+                      {errors.phone ? (
                         <p className="text-sm text-destructive">{errors.phone.message}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Format: 09XXXXXXXXX (11 digits)
+                        </p>
                       )}
                     </div>
                   </div>
@@ -688,13 +727,25 @@ export default function EventAppointmentPage() {
 
                   {/* MESSAGE */}
                   <div className="space-y-2">
-                    <Label>Additional Notes (Optional)</Label>
+                    <div className="flex justify-between items-center">
+                      <Label>Additional Notes (Optional)</Label>
+                      <span className={`text-xs ${notesCount > 50 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                        {notesCount}/50
+                      </span>
+                    </div>
                     <Textarea
                       {...register('message')}
                       placeholder="e.g. Godparents, special intention, specific requests..."
                       rows={4}
                       disabled={isSubmitting}
+                      maxLength={50}
                     />
+                    {errors.message && (
+                      <p className="text-sm text-destructive">{errors.message.message}</p>
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Maximum 50 characters
+                    </p>
                   </div>
 
                   {/* SUBMIT BUTTON */}

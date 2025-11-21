@@ -11,13 +11,14 @@ import {
   Clock,
   MapPin,
   Users,
-  Heart,
   CheckCircle,
   XCircle,
   CalendarDays
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
+import { db } from '@/lib/firebase-config';
+import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 
 interface Appointment {
   id: string;
@@ -27,6 +28,10 @@ interface Appointment {
   status: 'pending' | 'approved' | 'rejected';
   submittedAt: string;
   email: string;
+  fullName?: string;
+  phone?: string;
+  guestCount?: string;
+  message?: string;
 }
 
 interface ChurchEvent {
@@ -54,7 +59,7 @@ export default function ClientDashboardPage() {
   const { toast } = useToast();
 
   useEffect(() => {
-    const fetchDashboardData = () => {
+    const fetchDashboardData = async () => {
       try {
         setLoading(true);
         
@@ -73,9 +78,9 @@ export default function ClientDashboardPage() {
             // Use the first appointment's user data
             const latestAppointment = appointments[0];
             currentUser = {
-              name: latestAppointment.email.split('@')[0], // Use email username as fallback name
+              name: latestAppointment.fullName || latestAppointment.email.split('@')[0],
               email: latestAppointment.email,
-              phone: '+639171234567',
+              phone: latestAppointment.phone || '+639171234567',
               joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
               parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
             };
@@ -96,37 +101,75 @@ export default function ClientDashboardPage() {
 
         setUserData(currentUser);
 
-        // Get appointments from localStorage
-        const storedAppointments = localStorage.getItem('appointments');
-        const userAppointments: Appointment[] = storedAppointments 
-          ? JSON.parse(storedAppointments)
-              .filter((apt: Appointment) => apt.email === currentUser.email)
-              .sort((a: Appointment, b: Appointment) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
-          : [];
+        // REAL-TIME LISTENER FOR APPOINTMENTS FROM FIREBASE
+        if (currentUser?.email) {
+          const appointmentsQuery = query(
+            collection(db, 'appointments'),
+            where('email', '==', currentUser.email),
+            orderBy('createdAt', 'desc')
+          );
 
-        setAppointments(userAppointments.slice(0, 3)); // Show only latest 3
+          const unsubscribe = onSnapshot(appointmentsQuery, (querySnapshot) => {
+            const userAppointments: Appointment[] = [];
+            querySnapshot.forEach((doc) => {
+              const data = doc.data();
+              userAppointments.push({
+                id: doc.id,
+                eventType: data.eventType || '',
+                eventDate: data.eventDate || '',
+                eventTime: data.eventTime || '',
+                status: data.status || 'pending',
+                submittedAt: data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString(),
+                email: data.email || '',
+                fullName: data.fullName || '',
+                phone: data.phone || '',
+                guestCount: data.guestCount || '',
+                message: data.message || ''
+              });
+            });
+            
+            setAppointments(userAppointments.slice(0, 3)); // Show only latest 3
+            
+            // Show toast when new appointments are approved
+            userAppointments.forEach(apt => {
+              if (apt.status === 'approved') {
+                const wasPending = appointments.find(oldApt => 
+                  oldApt.id === apt.id && oldApt.status === 'pending'
+                );
+                
+                if (wasPending) {
+                  toast({
+                    title: 'Appointment Approved! 🎉',
+                    description: `Your ${apt.eventType} on ${formatDate(apt.eventDate)} has been approved.`,
+                  });
+                }
+              }
+            });
+          });
 
-        // Get church events from localStorage
-        const storedEvents = localStorage.getItem('churchEvents');
-        const churchEvents: ChurchEvent[] = storedEvents 
-          ? JSON.parse(storedEvents)
-              .slice(0, 3) // Show only latest 3
-          : [];
+          // Get church events from localStorage
+          const storedEvents = localStorage.getItem('churchEvents');
+          const churchEvents: ChurchEvent[] = storedEvents 
+            ? JSON.parse(storedEvents).slice(0, 3)
+            : [];
 
-        setUpcomingEvents(churchEvents);
+          setUpcomingEvents(churchEvents);
+
+          return () => unsubscribe();
+        }
 
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
         
-        // Fallback mock data
-        setUserData({
-          name: 'Parishioner',
-          email: 'user@example.com',
-          phone: '+639171234567',
-          joinDate: 'January 2024',
-          parishionerId: 'P-2024-00123'
-        });
-        setAppointments(getMockAppointments());
+        // Fallback to localStorage if Firebase fails
+        const storedAppointments = localStorage.getItem('appointments');
+        const userAppointments: Appointment[] = storedAppointments 
+          ? JSON.parse(storedAppointments)
+              .filter((apt: Appointment) => apt.email === userData?.email)
+              .sort((a: Appointment, b: Appointment) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
+          : [];
+
+        setAppointments(userAppointments.slice(0, 3));
         setUpcomingEvents(getMockEvents());
       } finally {
         setLoading(false);
@@ -134,28 +177,7 @@ export default function ClientDashboardPage() {
     };
 
     fetchDashboardData();
-  }, []);
-
-  const getMockAppointments = (): Appointment[] => [
-    {
-      id: '1',
-      eventType: 'Baptism',
-      eventDate: '2025-11-18',
-      eventTime: '09:00 AM',
-      status: 'approved',
-      submittedAt: '2025-11-15T10:30:00Z',
-      email: 'user@example.com'
-    },
-    {
-      id: '2',
-      eventType: 'Wedding',
-      eventDate: '2025-12-01',
-      eventTime: '02:00 PM',
-      status: 'approved',
-      submittedAt: '2025-11-14T14:20:00Z',
-      email: 'user@example.com'
-    }
-  ];
+  }, [toast]);
 
   const getMockEvents = (): ChurchEvent[] => [
     {
@@ -179,7 +201,8 @@ export default function ClientDashboardPage() {
   const getStatusBadge = (status: string) => {
     const variants = {
       approved: 'secondary',
-      rejected: 'destructive'
+      rejected: 'destructive',
+      pending: 'default'
     } as const;
 
     return (
@@ -274,7 +297,7 @@ export default function ClientDashboardPage() {
             <CardContent>
               <div className="text-2xl font-bold">{appointments.length}</div>
               <p className="text-xs text-muted-foreground">
-                Total bookings
+                {appointments.filter(apt => apt.status === 'approved').length} approved
               </p>
             </CardContent>
           </Card>
@@ -304,42 +327,6 @@ export default function ClientDashboardPage() {
               <p className="text-xs text-muted-foreground">Parishioner ID: {userData.parishionerId}</p>
             </CardContent>
           </Card>
-        </div>
-
-        {/* Quick Actions */}
-        <div className="mb-8">
-          <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
-            Quick Actions
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-primary to-primary/80 hover:from-primary/80 hover:to-primary text-primary-foreground shadow-lg">
-              <Link href="/c/appointments">
-                <Calendar className="w-8 h-8" />
-                <span className="text-sm">Book Appointment</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg">
-              <Link href="/c/tour">
-                <MapPin className="w-8 h-8" />
-                <span className="text-sm">Virtual Tour</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" className="h-24 flex flex-col gap-2 bg-gradient-to-br from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 text-white shadow-lg">
-              <Link href="/c/about">
-                <Church className="w-8 h-8" />
-                <span className="text-sm">About Church</span>
-              </Link>
-            </Button>
-
-            <Button asChild size="lg" variant="outline" className="h-24 flex flex-col gap-2 border-2 hover:border-primary shadow-lg">
-              <Link href="/c/settings">
-                <Heart className="w-8 h-8" />
-                <span className="text-sm">My Profile</span>
-              </Link>
-            </Button>
-          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
@@ -385,7 +372,9 @@ export default function ClientDashboardPage() {
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
                   <CardTitle>Recent Appointments</CardTitle>
-                  <CardDescription>Your recent sacrament requests</CardDescription>
+                  <CardDescription>
+                    Your recent sacrament requests • Real-time updates
+                  </CardDescription>
                 </div>
                 <Button asChild variant="outline" size="sm">
                   <Link href="/c/appointments">
@@ -407,13 +396,16 @@ export default function ClientDashboardPage() {
                     </div>
                   ) : (
                     appointments.map((appointment) => (
-                      <div key={appointment.id} className="flex items-center justify-between p-3 rounded-lg border bg-card">
+                      <div key={appointment.id} className="flex items-center justify-between p-3 rounded-lg border bg-card hover:shadow-md transition-shadow">
                         <div className="flex items-center gap-3">
                           <div className={`p-2 rounded-full ${
                             appointment.status === 'approved' ? 'bg-green-100 text-green-600' :
-                            'bg-red-100 text-red-600'
+                            appointment.status === 'rejected' ? 'bg-red-100 text-red-600' :
+                            'bg-yellow-100 text-yellow-600'
                           }`}>
-                            {appointment.status === 'approved' ? <CheckCircle className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                            {appointment.status === 'approved' ? <CheckCircle className="w-4 h-4" /> : 
+                             appointment.status === 'rejected' ? <XCircle className="w-4 h-4" /> :
+                             <Clock className="w-4 h-4" />}
                           </div>
                           <div>
                             <p className="font-medium">{appointment.eventType}</p>
@@ -467,35 +459,33 @@ export default function ClientDashboardPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* Status Legend */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Appointment Status</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <div className="w-3 h-3 rounded-full bg-green-500"></div>
+                    <span>Approved - Your appointment is confirmed</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                    <span>Pending - Waiting for admin approval</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm">
+                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                    <span>Rejected - Please contact the parish for details</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </div>
 
-        {/* Welcome Message for New Users */}
-        {appointments.length === 0 && (
-          <Card className="mt-8 bg-primary/5 border-primary/20">
-            <CardContent className="p-8 text-center">
-              <Church className="h-16 w-16 mx-auto mb-4 text-primary" />
-              <h3 className="text-2xl font-bold mb-2">Welcome to Saint Augustine Parish!</h3>
-              <p className="text-muted-foreground mb-6">
-                We're thrilled to have you as part of our community. Get started by booking your first appointment or exploring our church.
-              </p>
-              <div className="flex flex-wrap justify-center gap-4">
-                <Button asChild size="lg" className="gap-2">
-                  <Link href="/c/appointments">
-                    <Calendar className="w-5 h-5" />
-                    Book First Appointment
-                  </Link>
-                </Button>
-                <Button asChild variant="outline" size="lg" className="gap-2">
-                  <Link href="/c/tour">
-                    <MapPin className="w-5 h-5" />
-                    Take Virtual Tour
-                  </Link>
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {/* Welcome Message for New Users - REMOVED */}
       </div>
     </div>
   );

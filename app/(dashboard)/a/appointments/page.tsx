@@ -1,4 +1,4 @@
-// app/admin/manage-appointments/page.tsx
+// app/a/appointments/page.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -21,11 +21,10 @@ import {
   Printer,
   Eye,
   RefreshCw,
-  FileText,
-  AlertCircle
+  FileText
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { db, auth } from '@/lib/firebase-config';
+import { db } from '@/lib/firebase-config';
 import { 
   collection, 
   getDocs, 
@@ -36,8 +35,6 @@ import {
   where,
   onSnapshot 
 } from 'firebase/firestore';
-import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
-import { useRouter } from 'next/navigation';
 
 interface Appointment {
   id: string;
@@ -52,136 +49,83 @@ interface Appointment {
   status: 'pending' | 'approved' | 'rejected';
   createdAt: any;
   updatedAt: any;
-  notes?: string;
+  notes?: string; // Added notes field
 }
 
 export default function ManageAppointmentsPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [filteredAppointments, setFilteredAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [authLoading, setAuthLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [notes, setNotes] = useState('');
-  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
-  const [userRole, setUserRole] = useState<string>('');
   const { toast } = useToast();
-  const router = useRouter();
 
-  // Check authentication and user role
+  // Real-time listener for appointments
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        setCurrentUser(user);
-        // Check user role from Firestore
-        try {
-          const userDoc = await getDocs(query(
-            collection(db, 'users'),
-            where('uid', '==', user.uid)
-          ));
-          
-          if (!userDoc.empty) {
-            const userData = userDoc.docs[0].data();
-            setUserRole(userData.role || 'user');
-            
-            if (userData.role !== 'admin') {
-              toast({
-                title: 'Access Denied',
-                description: 'You need admin privileges to access this page.',
-                variant: 'destructive'
-              });
-              router.push('/');
-              return;
-            }
-          }
-        } catch (error) {
-          console.error('Error checking user role:', error);
-        }
-      } else {
-        // Not authenticated, redirect to login
-        router.push('/login');
-      }
-      setAuthLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, [router, toast]);
-
-  // Real-time listener for appointments - ONLY when user is authenticated admin
-  useEffect(() => {
-    if (!currentUser || userRole !== 'admin') return;
-
     const fetchAppointments = async () => {
       try {
         setLoading(true);
-        console.log('Fetching appointments from Firebase...');
-        
         const appointmentsQuery = query(
           collection(db, 'appointments'),
           orderBy('createdAt', 'desc')
         );
 
         // Real-time listener
-        const unsubscribe = onSnapshot(
-          appointmentsQuery, 
-          (querySnapshot) => {
-            console.log('Received snapshot with', querySnapshot.size, 'appointments');
-            const appointmentsData: Appointment[] = [];
-            
-            querySnapshot.forEach((doc) => {
-              const data = doc.data();
-              console.log('Appointment data:', data);
-              appointmentsData.push({
-                id: doc.id,
-                fullName: data.fullName || '',
-                email: data.email || '',
-                phone: data.phone || '',
-                eventType: data.eventType || '',
-                eventDate: data.eventDate || '',
-                eventTime: data.eventTime || '',
-                guestCount: data.guestCount || '',
-                message: data.message || '',
-                status: data.status || 'pending',
-                createdAt: data.createdAt,
-                updatedAt: data.updatedAt,
-                notes: data.notes || ''
-              });
+        const unsubscribe = onSnapshot(appointmentsQuery, (querySnapshot) => {
+          const appointmentsData: Appointment[] = [];
+          querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            appointmentsData.push({
+              id: doc.id,
+              fullName: data.fullName || '',
+              email: data.email || '',
+              phone: data.phone || '',
+              eventType: data.eventType || '',
+              eventDate: data.eventDate || '',
+              eventTime: data.eventTime || '',
+              guestCount: data.guestCount || '',
+              message: data.message || '',
+              status: data.status || 'pending',
+              createdAt: data.createdAt,
+              updatedAt: data.updatedAt,
+              notes: data.notes || '' // Load notes from Firebase
             });
-            
-            setAppointments(appointmentsData);
-            setLoading(false);
-            setRefreshing(false);
-          },
-          (error) => {
-            console.error('Firestore error:', error);
-            setLoading(false);
-            setRefreshing(false);
-            
-            toast({
-              title: 'Database Error',
-              description: 'Failed to connect to Firebase. Please check your connection.',
-              variant: 'destructive'
-            });
-          }
-        );
+          });
+          
+          setAppointments(appointmentsData);
+          setLoading(false);
+          setRefreshing(false);
+        });
 
         return () => unsubscribe();
       } catch (error) {
-        console.error('Error setting up appointments listener:', error);
+        console.error('Error fetching appointments:', error);
         toast({
           title: 'Error',
-          description: 'Failed to load appointments',
+          description: 'Failed to load appointments from Firebase',
           variant: 'destructive'
         });
         setLoading(false);
         setRefreshing(false);
+        
+        // Fallback to localStorage
+        const storedAppointments = localStorage.getItem('appointments');
+        if (storedAppointments) {
+          try {
+            const localAppointments: Appointment[] = JSON.parse(storedAppointments);
+            setAppointments(localAppointments);
+          } catch (e) {
+            console.error('Failed to load from localStorage:', e);
+          }
+        }
       }
     };
 
     fetchAppointments();
-  }, [currentUser, userRole, toast]);
+  }, [toast]);
 
   // Filter appointments based on search and status
   useEffect(() => {
@@ -199,7 +143,7 @@ export default function ManageAppointmentsPage() {
         apt.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
         apt.eventType.toLowerCase().includes(searchTerm.toLowerCase()) ||
         apt.phone.includes(searchTerm) ||
-        (apt.notes && apt.notes.toLowerCase().includes(searchTerm.toLowerCase()))
+        (apt.notes && apt.notes.toLowerCase().includes(searchTerm.toLowerCase())) // Search in notes
       );
     }
 
@@ -208,19 +152,8 @@ export default function ManageAppointmentsPage() {
 
   // Update appointment status in Firebase
   const handleStatusUpdate = async (appointmentId: string, newStatus: 'approved' | 'rejected') => {
-    if (!currentUser) {
-      toast({
-        title: 'Authentication Required',
-        description: 'Please log in to perform this action.',
-        variant: 'destructive'
-      });
-      return;
-    }
-
     try {
       setRefreshing(true);
-      
-      console.log('Updating appointment:', appointmentId, 'to status:', newStatus);
       
       // Update in Firebase
       const appointmentRef = doc(db, 'appointments', appointmentId);
@@ -229,6 +162,12 @@ export default function ManageAppointmentsPage() {
         updatedAt: new Date()
       });
 
+      // Also update localStorage as backup
+      const updatedAppointments = appointments.map(apt =>
+        apt.id === appointmentId ? { ...apt, status: newStatus } : apt
+      );
+      localStorage.setItem('appointments', JSON.stringify(updatedAppointments));
+
       const appointment = appointments.find(apt => apt.id === appointmentId);
       
       toast({
@@ -236,19 +175,11 @@ export default function ManageAppointmentsPage() {
         description: `${appointment?.fullName}'s ${formatEventType(appointment?.eventType || '')} has been ${newStatus}.`,
       });
 
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error updating appointment:', error);
-      
-      let errorMessage = 'Failed to update appointment status';
-      if (error.code === 'permission-denied') {
-        errorMessage = 'Permission denied. Please check Firestore rules.';
-      } else if (error.code === 'not-found') {
-        errorMessage = 'Appointment not found.';
-      }
-      
       toast({
         title: 'Error',
-        description: errorMessage,
+        description: `Failed to update appointment status`,
         variant: 'destructive'
       });
     } finally {
@@ -258,15 +189,6 @@ export default function ManageAppointmentsPage() {
 
   // Save notes to Firebase
   const handleSaveNotes = async (appointmentId: string) => {
-    if (!currentUser) {
-      toast({
-        title: 'Authentication Required',
-        description: 'Please log in to perform this action.',
-        variant: 'destructive'
-      });
-      return;
-    }
-
     if (notes.length > 500) {
       toast({
         title: 'Error',
@@ -291,25 +213,20 @@ export default function ManageAppointmentsPage() {
         apt.id === appointmentId ? { ...apt, notes: notes } : apt
       );
       setAppointments(updatedAppointments);
+      localStorage.setItem('appointments', JSON.stringify(updatedAppointments));
 
       toast({
         title: 'Notes Saved',
         description: 'Your notes have been saved successfully.',
       });
 
-      setNotes('');
+      setNotes(''); // Clear notes input
       
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error saving notes:', error);
-      
-      let errorMessage = 'Failed to save notes';
-      if (error.code === 'permission-denied') {
-        errorMessage = 'Permission denied. Please check Firestore rules.';
-      }
-      
       toast({
         title: 'Error',
-        description: errorMessage,
+        description: 'Failed to save notes',
         variant: 'destructive'
       });
     } finally {
@@ -320,8 +237,8 @@ export default function ManageAppointmentsPage() {
   // Refresh data manually
   const handleRefresh = () => {
     setRefreshing(true);
-    // Force re-fetch by resetting and letting the effect run again
-    setTimeout(() => setRefreshing(false), 2000);
+    // The real-time listener will automatically update the data
+    setTimeout(() => setRefreshing(false), 1000);
   };
 
   const getStatusBadge = (status: string) => {
@@ -339,32 +256,24 @@ export default function ManageAppointmentsPage() {
   };
 
   const formatDate = (dateString: string) => {
-    try {
-      return new Date(dateString).toLocaleDateString('en-US', {
-        weekday: 'long',
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-      });
-    } catch (error) {
-      return 'Invalid Date';
-    }
+    return new Date(dateString).toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
   };
 
   const formatDateTime = (timestamp: any) => {
     if (!timestamp) return 'N/A';
-    try {
-      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    } catch (error) {
-      return 'Invalid Date';
-    }
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   const formatEventType = (eventType: string): string => {
@@ -372,9 +281,7 @@ export default function ManageAppointmentsPage() {
       'mass': 'Holy Mass',
       'wedding': 'Wedding',
       'baptism': 'Baptism',
-      'funeral': 'Funeral Mass',
-      'confirmation': 'Confirmation',
-      'first-communion': 'First Communion'
+      'funeral': 'Funeral Mass'
     };
     return eventMap[eventType] || eventType;
   };
@@ -390,28 +297,12 @@ export default function ManageAppointmentsPage() {
 
   const stats = getStats();
 
-  // Show loading while checking authentication
-  if (authLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Checking authentication...</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Show loading while fetching data
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading appointments...</p>
-          <p className="text-sm text-muted-foreground mt-2">
-            Connected to Firebase as {currentUser?.email}
-          </p>
+          <p className="mt-4 text-muted-foreground">Loading appointments from Firebase...</p>
         </div>
       </div>
     );
@@ -429,10 +320,7 @@ export default function ManageAppointmentsPage() {
                 Manage Appointments
               </h1>
               <p className="mt-2 text-primary-foreground/80">
-                Real-time management of all sacrament appointment requests
-              </p>
-              <p className="text-sm mt-1">
-                Logged in as: {currentUser?.email} | Role: {userRole}
+                Real-time management of all sacrament appointment requests from Firebase
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -445,6 +333,14 @@ export default function ManageAppointmentsPage() {
               >
                 <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
                 Refresh
+              </Button>
+              <Button variant="secondary" size="lg" className="gap-2">
+                <Download className="w-5 h-5" />
+                Export
+              </Button>
+              <Button variant="secondary" size="lg" className="gap-2">
+                <Printer className="w-5 h-5" />
+                Print
               </Button>
             </div>
           </div>
@@ -503,7 +399,6 @@ export default function ManageAppointmentsPage() {
           </Card>
         </div>
 
-        {/* Rest of your component remains the same */}
         {/* Filters and Search */}
         <Card className="mb-8">
           <CardContent className="p-6">
@@ -691,7 +586,7 @@ export default function ManageAppointmentsPage() {
         </Card>
       </div>
 
-      {/* Appointment Detail Modal - Same as before */}
+      {/* Appointment Detail Modal */}
       {selectedAppointment && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
