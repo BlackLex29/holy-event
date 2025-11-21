@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, CheckCircle, XCircle, Copy, LogOut } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Copy } from 'lucide-react';
 import {
     updatePassword,
     reauthenticateWithCredential,
@@ -17,7 +17,6 @@ import {
     TotpMultiFactorGenerator,
     TotpSecret,
     onAuthStateChanged,
-    signOut, // ← Added
 } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase-config';
@@ -231,39 +230,11 @@ const AdminSettingsPage = () => {
         ? totpSecret.generateQrCodeUrl(user!.email!, 'Grace Fellowship')
         : '';
 
-    /* -------------------------------------------------------------
-       LOGOUT HANDLER
-       ------------------------------------------------------------- */
-    const handleLogout = async () => {
-        setLoading(true);
-        try {
-            await signOut(auth);
-            router.push('/login'); // or wherever your login page is
-        } catch (err: any) {
-            showMessage(err.message || 'Logout failed.', true);
-        } finally {
-            setLoading(false);
-        }
-    };
-
     return (
         <div className="container max-w-4xl py-8">
-            {/* Header with Title + Logout */}
-            <div className="flex items-center justify-between mb-8">
+            {/* Header with Title Only - Logout Button Removed */}
+            <div className="mb-8">
                 <h1 className="text-3xl font-bold">Admin Settings</h1>
-                <Button
-                    variant="outline"
-                    onClick={handleLogout}
-                    disabled={loading}
-                    className="flex items-center gap-2"
-                >
-                    {loading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                        <LogOut className="h-4 w-4" />
-                    )}
-                    Logout
-                </Button>
             </div>
 
             {error && (

@@ -1,4 +1,4 @@
-// app/a/appointments/page.tsx
+// app/admin/manage-appointments/page.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import {
   Calendar,
@@ -19,10 +20,12 @@ import {
   Download,
   Printer,
   Eye,
-  RefreshCw
+  RefreshCw,
+  FileText,
+  AlertCircle
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
-import { db } from '@/lib/firebase-config';
+import { db, auth } from '@/lib/firebase-config';
 import { 
   collection, 
   getDocs, 
@@ -33,6 +36,8 @@ import {
   where,
   onSnapshot 
 } from 'firebase/firestore';
+import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
+import { useRouter } from 'next/navigation';
 
 interface Appointment {
   id: string;
@@ -47,80 +52,136 @@ interface Appointment {
   status: 'pending' | 'approved' | 'rejected';
   createdAt: any;
   updatedAt: any;
+  notes?: string;
 }
 
 export default function ManageAppointmentsPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [filteredAppointments, setFilteredAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [notes, setNotes] = useState('');
+  const [currentUser, setCurrentUser] = useState<FirebaseUser | null>(null);
+  const [userRole, setUserRole] = useState<string>('');
   const { toast } = useToast();
+  const router = useRouter();
 
-  // Real-time listener for appointments
+  // Check authentication and user role
   useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        setCurrentUser(user);
+        // Check user role from Firestore
+        try {
+          const userDoc = await getDocs(query(
+            collection(db, 'users'),
+            where('uid', '==', user.uid)
+          ));
+          
+          if (!userDoc.empty) {
+            const userData = userDoc.docs[0].data();
+            setUserRole(userData.role || 'user');
+            
+            if (userData.role !== 'admin') {
+              toast({
+                title: 'Access Denied',
+                description: 'You need admin privileges to access this page.',
+                variant: 'destructive'
+              });
+              router.push('/');
+              return;
+            }
+          }
+        } catch (error) {
+          console.error('Error checking user role:', error);
+        }
+      } else {
+        // Not authenticated, redirect to login
+        router.push('/login');
+      }
+      setAuthLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [router, toast]);
+
+  // Real-time listener for appointments - ONLY when user is authenticated admin
+  useEffect(() => {
+    if (!currentUser || userRole !== 'admin') return;
+
     const fetchAppointments = async () => {
       try {
         setLoading(true);
+        console.log('Fetching appointments from Firebase...');
+        
         const appointmentsQuery = query(
           collection(db, 'appointments'),
           orderBy('createdAt', 'desc')
         );
 
         // Real-time listener
-        const unsubscribe = onSnapshot(appointmentsQuery, (querySnapshot) => {
-          const appointmentsData: Appointment[] = [];
-          querySnapshot.forEach((doc) => {
-            const data = doc.data();
-            appointmentsData.push({
-              id: doc.id,
-              fullName: data.fullName || '',
-              email: data.email || '',
-              phone: data.phone || '',
-              eventType: data.eventType || '',
-              eventDate: data.eventDate || '',
-              eventTime: data.eventTime || '',
-              guestCount: data.guestCount || '',
-              message: data.message || '',
-              status: data.status || 'pending',
-              createdAt: data.createdAt,
-              updatedAt: data.updatedAt
+        const unsubscribe = onSnapshot(
+          appointmentsQuery, 
+          (querySnapshot) => {
+            console.log('Received snapshot with', querySnapshot.size, 'appointments');
+            const appointmentsData: Appointment[] = [];
+            
+            querySnapshot.forEach((doc) => {
+              const data = doc.data();
+              console.log('Appointment data:', data);
+              appointmentsData.push({
+                id: doc.id,
+                fullName: data.fullName || '',
+                email: data.email || '',
+                phone: data.phone || '',
+                eventType: data.eventType || '',
+                eventDate: data.eventDate || '',
+                eventTime: data.eventTime || '',
+                guestCount: data.guestCount || '',
+                message: data.message || '',
+                status: data.status || 'pending',
+                createdAt: data.createdAt,
+                updatedAt: data.updatedAt,
+                notes: data.notes || ''
+              });
             });
-          });
-          
-          setAppointments(appointmentsData);
-          setLoading(false);
-          setRefreshing(false);
-        });
+            
+            setAppointments(appointmentsData);
+            setLoading(false);
+            setRefreshing(false);
+          },
+          (error) => {
+            console.error('Firestore error:', error);
+            setLoading(false);
+            setRefreshing(false);
+            
+            toast({
+              title: 'Database Error',
+              description: 'Failed to connect to Firebase. Please check your connection.',
+              variant: 'destructive'
+            });
+          }
+        );
 
         return () => unsubscribe();
       } catch (error) {
-        console.error('Error fetching appointments:', error);
+        console.error('Error setting up appointments listener:', error);
         toast({
           title: 'Error',
-          description: 'Failed to load appointments from Firebase',
+          description: 'Failed to load appointments',
           variant: 'destructive'
         });
         setLoading(false);
         setRefreshing(false);
-        
-        // Fallback to localStorage
-        const storedAppointments = localStorage.getItem('appointments');
-        if (storedAppointments) {
-          try {
-            const localAppointments: Appointment[] = JSON.parse(storedAppointments);
-            setAppointments(localAppointments);
-          } catch (e) {
-            console.error('Failed to load from localStorage:', e);
-          }
-        }
       }
     };
 
     fetchAppointments();
-  }, [toast]);
+  }, [currentUser, userRole, toast]);
 
   // Filter appointments based on search and status
   useEffect(() => {
@@ -137,7 +198,8 @@ export default function ManageAppointmentsPage() {
         apt.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         apt.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
         apt.eventType.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        apt.phone.includes(searchTerm)
+        apt.phone.includes(searchTerm) ||
+        (apt.notes && apt.notes.toLowerCase().includes(searchTerm.toLowerCase()))
       );
     }
 
@@ -146,8 +208,19 @@ export default function ManageAppointmentsPage() {
 
   // Update appointment status in Firebase
   const handleStatusUpdate = async (appointmentId: string, newStatus: 'approved' | 'rejected') => {
+    if (!currentUser) {
+      toast({
+        title: 'Authentication Required',
+        description: 'Please log in to perform this action.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
     try {
       setRefreshing(true);
+      
+      console.log('Updating appointment:', appointmentId, 'to status:', newStatus);
       
       // Update in Firebase
       const appointmentRef = doc(db, 'appointments', appointmentId);
@@ -156,12 +229,6 @@ export default function ManageAppointmentsPage() {
         updatedAt: new Date()
       });
 
-      // Also update localStorage as backup
-      const updatedAppointments = appointments.map(apt =>
-        apt.id === appointmentId ? { ...apt, status: newStatus } : apt
-      );
-      localStorage.setItem('appointments', JSON.stringify(updatedAppointments));
-
       const appointment = appointments.find(apt => apt.id === appointmentId);
       
       toast({
@@ -169,11 +236,80 @@ export default function ManageAppointmentsPage() {
         description: `${appointment?.fullName}'s ${formatEventType(appointment?.eventType || '')} has been ${newStatus}.`,
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating appointment:', error);
+      
+      let errorMessage = 'Failed to update appointment status';
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. Please check Firestore rules.';
+      } else if (error.code === 'not-found') {
+        errorMessage = 'Appointment not found.';
+      }
+      
       toast({
         title: 'Error',
-        description: `Failed to update appointment status`,
+        description: errorMessage,
+        variant: 'destructive'
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Save notes to Firebase
+  const handleSaveNotes = async (appointmentId: string) => {
+    if (!currentUser) {
+      toast({
+        title: 'Authentication Required',
+        description: 'Please log in to perform this action.',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    if (notes.length > 500) {
+      toast({
+        title: 'Error',
+        description: 'Notes cannot exceed 500 characters',
+        variant: 'destructive'
+      });
+      return;
+    }
+
+    try {
+      setRefreshing(true);
+      
+      // Update in Firebase
+      const appointmentRef = doc(db, 'appointments', appointmentId);
+      await updateDoc(appointmentRef, {
+        notes: notes,
+        updatedAt: new Date()
+      });
+
+      // Update local state
+      const updatedAppointments = appointments.map(apt =>
+        apt.id === appointmentId ? { ...apt, notes: notes } : apt
+      );
+      setAppointments(updatedAppointments);
+
+      toast({
+        title: 'Notes Saved',
+        description: 'Your notes have been saved successfully.',
+      });
+
+      setNotes('');
+      
+    } catch (error: any) {
+      console.error('Error saving notes:', error);
+      
+      let errorMessage = 'Failed to save notes';
+      if (error.code === 'permission-denied') {
+        errorMessage = 'Permission denied. Please check Firestore rules.';
+      }
+      
+      toast({
+        title: 'Error',
+        description: errorMessage,
         variant: 'destructive'
       });
     } finally {
@@ -184,8 +320,8 @@ export default function ManageAppointmentsPage() {
   // Refresh data manually
   const handleRefresh = () => {
     setRefreshing(true);
-    // The real-time listener will automatically update the data
-    setTimeout(() => setRefreshing(false), 1000);
+    // Force re-fetch by resetting and letting the effect run again
+    setTimeout(() => setRefreshing(false), 2000);
   };
 
   const getStatusBadge = (status: string) => {
@@ -203,24 +339,32 @@ export default function ManageAppointmentsPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+    } catch (error) {
+      return 'Invalid Date';
+    }
   };
 
   const formatDateTime = (timestamp: any) => {
     if (!timestamp) return 'N/A';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    try {
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (error) {
+      return 'Invalid Date';
+    }
   };
 
   const formatEventType = (eventType: string): string => {
@@ -228,7 +372,9 @@ export default function ManageAppointmentsPage() {
       'mass': 'Holy Mass',
       'wedding': 'Wedding',
       'baptism': 'Baptism',
-      'funeral': 'Funeral Mass'
+      'funeral': 'Funeral Mass',
+      'confirmation': 'Confirmation',
+      'first-communion': 'First Communion'
     };
     return eventMap[eventType] || eventType;
   };
@@ -244,12 +390,28 @@ export default function ManageAppointmentsPage() {
 
   const stats = getStats();
 
+  // Show loading while checking authentication
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <p className="mt-4 text-muted-foreground">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show loading while fetching data
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading appointments from Firebase...</p>
+          <p className="mt-4 text-muted-foreground">Loading appointments...</p>
+          <p className="text-sm text-muted-foreground mt-2">
+            Connected to Firebase as {currentUser?.email}
+          </p>
         </div>
       </div>
     );
@@ -267,7 +429,10 @@ export default function ManageAppointmentsPage() {
                 Manage Appointments
               </h1>
               <p className="mt-2 text-primary-foreground/80">
-                Real-time management of all sacrament appointment requests from Firebase
+                Real-time management of all sacrament appointment requests
+              </p>
+              <p className="text-sm mt-1">
+                Logged in as: {currentUser?.email} | Role: {userRole}
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -280,14 +445,6 @@ export default function ManageAppointmentsPage() {
               >
                 <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
                 Refresh
-              </Button>
-              <Button variant="secondary" size="lg" className="gap-2">
-                <Download className="w-5 h-5" />
-                Export
-              </Button>
-              <Button variant="secondary" size="lg" className="gap-2">
-                <Printer className="w-5 h-5" />
-                Print
               </Button>
             </div>
           </div>
@@ -346,6 +503,7 @@ export default function ManageAppointmentsPage() {
           </Card>
         </div>
 
+        {/* Rest of your component remains the same */}
         {/* Filters and Search */}
         <Card className="mb-8">
           <CardContent className="p-6">
@@ -354,7 +512,7 @@ export default function ManageAppointmentsPage() {
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                   <Input
-                    placeholder="Search by name, email, or event type..."
+                    placeholder="Search by name, email, event type, or notes..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10"
@@ -473,6 +631,17 @@ export default function ManageAppointmentsPage() {
                             <p className="text-sm">"{appointment.message}"</p>
                           </div>
                         )}
+
+                        {/* Admin Notes Display */}
+                        {appointment.notes && (
+                          <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                            <p className="font-semibold text-sm mb-1 flex items-center gap-2">
+                              <FileText className="w-4 h-4 text-blue-600" />
+                              Admin Notes:
+                            </p>
+                            <p className="text-sm text-blue-800">"{appointment.notes}"</p>
+                          </div>
+                        )}
                       </div>
 
                       {/* Action Buttons */}
@@ -504,7 +673,10 @@ export default function ManageAppointmentsPage() {
                           variant="outline"
                           size="sm"
                           className="gap-2"
-                          onClick={() => setSelectedAppointment(appointment)}
+                          onClick={() => {
+                            setSelectedAppointment(appointment);
+                            setNotes(appointment.notes || '');
+                          }}
                         >
                           <Eye className="w-4 h-4" />
                           View Details
@@ -519,7 +691,7 @@ export default function ManageAppointmentsPage() {
         </Card>
       </div>
 
-      {/* Appointment Detail Modal */}
+      {/* Appointment Detail Modal - Same as before */}
       {selectedAppointment && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <Card className="w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -584,10 +756,38 @@ export default function ManageAppointmentsPage() {
                 </div>
               )}
 
+              {/* Admin Notes Section */}
+              <div>
+                <p className="font-semibold mb-2 flex items-center gap-2">
+                  <FileText className="w-4 h-4" />
+                  Admin Notes
+                </p>
+                <Textarea
+                  placeholder="Add notes about this appointment (max 500 characters)..."
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  className="min-h-[100px] resize-none"
+                  maxLength={500}
+                />
+                <div className="flex justify-between items-center mt-2">
+                  <span className="text-sm text-muted-foreground">
+                    {notes.length}/500 characters
+                  </span>
+                  <Button
+                    onClick={() => handleSaveNotes(selectedAppointment.id)}
+                    disabled={refreshing || notes.length > 500}
+                    size="sm"
+                  >
+                    Save Notes
+                  </Button>
+                </div>
+              </div>
+
               <div className="flex gap-2 pt-4">
                 <Button
                   onClick={() => {
                     setSelectedAppointment(null);
+                    setNotes('');
                   }}
                   variant="outline"
                 >
@@ -599,6 +799,7 @@ export default function ManageAppointmentsPage() {
                       onClick={() => {
                         handleStatusUpdate(selectedAppointment.id, 'approved');
                         setSelectedAppointment(null);
+                        setNotes('');
                       }}
                       className="bg-green-600 hover:bg-green-700"
                       disabled={refreshing}
@@ -609,6 +810,7 @@ export default function ManageAppointmentsPage() {
                       onClick={() => {
                         handleStatusUpdate(selectedAppointment.id, 'rejected');
                         setSelectedAppointment(null);
+                        setNotes('');
                       }}
                       variant="outline"
                       className="text-red-600 hover:text-red-700 hover:bg-red-50"

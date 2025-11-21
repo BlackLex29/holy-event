@@ -1,4 +1,3 @@
-// app/a/dashboard/page.tsx
 'use client';
 
 import React, { useState, useEffect } from 'react';
@@ -19,23 +18,36 @@ import {
   UserCheck,
   CheckCircle,
   XCircle,
-  MoreVertical
+  RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
+import { db } from '@/lib/firebase-config';
+import { 
+  collection, 
+  getDocs, 
+  query, 
+  orderBy, 
+  limit, 
+  where,
+  updateDoc,
+  doc,
+  onSnapshot
+} from 'firebase/firestore';
 
 // Types for our data
 interface Appointment {
   id: string;
-  name: string;
+  fullName: string;
   email: string;
   phone: string;
   eventType: string;
-  preferredDate: string;
-  preferredTime: string;
+  eventDate: string;
+  eventTime: string;
+  guestCount: string;
   message?: string;
   status: 'pending' | 'approved' | 'rejected';
-  createdAt: string;
+  createdAt: any;
 }
 
 interface DashboardStats {
@@ -54,30 +66,51 @@ const AdminDashboardPage = () => {
     activeUsersToday: 0
   });
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const { toast } = useToast();
 
-  // Fetch real data
+  // Fetch real data from Firebase
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
         
-        // Simulate API calls - replace with your actual API endpoints
-        const [appointmentsRes, statsRes] = await Promise.all([
-          fetch('/api/appointments?limit=5'),
-          fetch('/api/dashboard/stats')
-        ]);
+        // Fetch recent appointments
+        const appointmentsQuery = query(
+          collection(db, 'appointments'),
+          orderBy('createdAt', 'desc'),
+          limit(5)
+        );
 
-        const appointmentsData = await appointmentsRes.json();
-        const statsData = await statsRes.json();
-
-        setAppointments(appointmentsData.appointments || []);
-        setStats(statsData.stats || {
-          totalParishioners: 1284,
-          upcomingEvents: 8,
-          pendingAppointments: 5,
-          activeUsersToday: 142
+        // Real-time listener for appointments
+        const unsubscribeAppointments = onSnapshot(appointmentsQuery, (snapshot) => {
+          const appointmentsData: Appointment[] = [];
+          snapshot.forEach((doc) => {
+            const data = doc.data();
+            appointmentsData.push({
+              id: doc.id,
+              fullName: data.fullName || '',
+              email: data.email || '',
+              phone: data.phone || '',
+              eventType: data.eventType || '',
+              eventDate: data.eventDate || '',
+              eventTime: data.eventTime || '',
+              guestCount: data.guestCount || '',
+              message: data.message || '',
+              status: data.status || 'pending',
+              createdAt: data.createdAt
+            });
+          });
+          setAppointments(appointmentsData);
         });
+
+        // Fetch dashboard statistics
+        await fetchDashboardStats();
+
+        return () => {
+          unsubscribeAppointments();
+        };
+
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
         toast({
@@ -85,9 +118,6 @@ const AdminDashboardPage = () => {
           description: 'Failed to load dashboard data',
           variant: 'destructive'
         });
-        
-        // Fallback mock data
-        setAppointments(getMockAppointments());
       } finally {
         setLoading(false);
       }
@@ -96,76 +126,66 @@ const AdminDashboardPage = () => {
     fetchDashboardData();
   }, [toast]);
 
-  // Mock data fallback
-  const getMockAppointments = (): Appointment[] => [
-    {
-      id: '1',
-      name: 'Maria Santos',
-      email: 'maria.santos@email.com',
-      phone: '+639171234567',
-      eventType: 'Baptism',
-      preferredDate: '2025-11-18',
-      preferredTime: '09:00 AM',
-      message: 'For my newborn baby girl',
-      status: 'pending',
-      createdAt: '2025-11-15T10:30:00Z'
-    },
-    {
-      id: '2',
-      name: 'Juan Dela Cruz',
-      email: 'juan.dc@email.com',
-      phone: '+639182345678',
-      eventType: 'Wedding',
-      preferredDate: '2025-12-01',
-      preferredTime: '02:00 PM',
-      message: 'Church wedding ceremony',
-      status: 'approved',
-      createdAt: '2025-11-14T14:20:00Z'
-    },
-    {
-      id: '3',
-      name: 'Ana Lim',
-      email: 'ana.lim@email.com',
-      phone: '+639193456789',
-      eventType: 'First Communion',
-      preferredDate: '2025-11-25',
-      preferredTime: '10:30 AM',
-      message: 'For my 7-year-old son',
-      status: 'pending',
-      createdAt: '2025-11-16T09:15:00Z'
-    },
-    {
-      id: '4',
-      name: 'Roberto Garcia',
-      email: 'robert.g@email.com',
-      phone: '+639204567890',
-      eventType: 'Confirmation',
-      preferredDate: '2025-11-20',
-      preferredTime: '03:00 PM',
-      status: 'pending',
-      createdAt: '2025-11-16T16:45:00Z'
-    },
-    {
-      id: '5',
-      name: 'Sofia Reyes',
-      email: 'sofia.reyes@email.com',
-      phone: '+639215678901',
-      eventType: 'Funeral Mass',
-      preferredDate: '2025-11-19',
-      preferredTime: '08:00 AM',
-      message: 'For my late father',
-      status: 'approved',
-      createdAt: '2025-11-15T11:20:00Z'
-    }
-  ];
+  // Fetch dashboard statistics
+  const fetchDashboardStats = async () => {
+    try {
+      setRefreshing(true);
 
+      // Fetch total parishioners (users)
+      const usersQuery = query(collection(db, 'users'));
+      const usersSnapshot = await getDocs(usersQuery);
+      const totalParishioners = usersSnapshot.size;
+
+      // Fetch pending appointments
+      const pendingQuery = query(
+        collection(db, 'appointments'),
+        where('status', '==', 'pending')
+      );
+      const pendingSnapshot = await getDocs(pendingQuery);
+      const pendingAppointments = pendingSnapshot.size;
+
+      // Fetch total appointments for today (for active users)
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayQuery = query(
+        collection(db, 'appointments'),
+        where('createdAt', '>=', today)
+      );
+      const todaySnapshot = await getDocs(todayQuery);
+      const activeUsersToday = todaySnapshot.size;
+
+      // Fetch upcoming events (you can create an 'events' collection later)
+      const upcomingEvents = 0; // Placeholder for now
+
+      setStats({
+        totalParishioners,
+        upcomingEvents,
+        pendingAppointments,
+        activeUsersToday
+      });
+
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to load statistics',
+        variant: 'destructive'
+      });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // Handle appointment actions
   const handleAppointmentAction = async (appointmentId: string, action: 'approve' | 'reject') => {
     try {
-      // Simulate API call
-      await fetch(`/api/appointments/${appointmentId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: action === 'approve' ? 'approved' : 'rejected' })
+      setRefreshing(true);
+      
+      // Update in Firebase
+      const appointmentRef = doc(db, 'appointments', appointmentId);
+      await updateDoc(appointmentRef, {
+        status: action === 'approve' ? 'approved' : 'rejected',
+        updatedAt: new Date()
       });
 
       // Update local state
@@ -174,6 +194,9 @@ const AdminDashboardPage = () => {
           ? { ...apt, status: action === 'approve' ? 'approved' : 'rejected' }
           : apt
       ));
+
+      // Refresh stats
+      await fetchDashboardStats();
 
       toast({
         title: `Appointment ${action === 'approve' ? 'Approved' : 'Rejected'}`,
@@ -185,7 +208,18 @@ const AdminDashboardPage = () => {
         description: `Failed to ${action} appointment`,
         variant: 'destructive'
       });
+    } finally {
+      setRefreshing(false);
     }
+  };
+
+  // Refresh all data
+  const handleRefresh = async () => {
+    await fetchDashboardStats();
+    toast({
+      title: 'Refreshed',
+      description: 'Dashboard data has been updated.',
+    });
   };
 
   const getStatusBadge = (status: string) => {
@@ -210,8 +244,27 @@ const AdminDashboardPage = () => {
     });
   };
 
-  const formatTime = (timeString: string) => {
-    return timeString; // Assuming time is already in readable format
+  const formatEventType = (eventType: string): string => {
+    const eventMap: Record<string, string> = {
+      'mass': 'Holy Mass',
+      'wedding': 'Wedding',
+      'baptism': 'Baptism',
+      'funeral': 'Funeral Mass',
+      'confirmation': 'Confirmation',
+      'first-communion': 'First Communion'
+    };
+    return eventMap[eventType] || eventType;
+  };
+
+  const formatDateTime = (timestamp: any) => {
+    if (!timestamp) return 'N/A';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
   };
 
   if (loading) {
@@ -241,6 +294,16 @@ const AdminDashboardPage = () => {
               </p>
             </div>
             <div className="flex items-center gap-4">
+              <Button 
+                variant="secondary" 
+                size="lg" 
+                className="gap-2"
+                onClick={handleRefresh}
+                disabled={refreshing}
+              >
+                <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </Button>
               <Button variant="secondary" size="lg" className="gap-2">
                 <Bell className="w-5 h-5" />
                 <span>{stats.pendingAppointments} Pending</span>
@@ -268,7 +331,7 @@ const AdminDashboardPage = () => {
               <div className="text-2xl font-bold">{stats.totalParishioners.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                 <TrendingUp className="w-3 h-3 text-green-600" />
-                +12% from last month
+                Registered members
               </p>
             </CardContent>
           </Card>
@@ -282,7 +345,7 @@ const AdminDashboardPage = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stats.upcomingEvents}</div>
-              <p className="text-xs text-muted-foreground">This week</p>
+              <p className="text-xs text-muted-foreground">Scheduled this week</p>
             </CardContent>
           </Card>
 
@@ -302,13 +365,13 @@ const AdminDashboardPage = () => {
           <Card className="border-l-4 border-l-purple-500 shadow-lg">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Active Users Today
+                Today's Activity
               </CardTitle>
               <UserCheck className="w-5 h-5 text-purple-600" />
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stats.activeUsersToday}</div>
-              <p className="text-xs text-muted-foreground">Online now</p>
+              <p className="text-xs text-muted-foreground">Appointments today</p>
             </CardContent>
           </Card>
         </div>
@@ -353,7 +416,7 @@ const AdminDashboardPage = () => {
 
         {/* Recent Activity */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Recent Appointments - NOW WITH REAL DATA */}
+          {/* Recent Appointments - REAL DATA FROM FIREBASE */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
@@ -363,7 +426,9 @@ const AdminDashboardPage = () => {
                     <Badge variant="secondary">{stats.pendingAppointments} Pending</Badge>
                   )}
                 </CardTitle>
-                <CardDescription>Latest sacrament requests from parishioners</CardDescription>
+                <CardDescription>
+                  Latest sacrament requests from parishioners • Real-time data
+                </CardDescription>
               </div>
               <Button asChild variant="outline" size="sm">
                 <Link href="/a/appointments">
@@ -377,24 +442,30 @@ const AdminDashboardPage = () => {
                   <div className="text-center py-8 text-muted-foreground">
                     <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
                     <p>No appointments found</p>
+                    <p className="text-sm mt-2">Appointments will appear here when parishioners submit requests.</p>
                   </div>
                 ) : (
                   appointments.map((appointment) => (
-                    <div key={appointment.id} className="flex items-center justify-between p-4 rounded-lg border bg-card">
+                    <div key={appointment.id} className="flex items-center justify-between p-4 rounded-lg border bg-card hover:shadow-md transition-shadow">
                       <div className="flex items-start gap-3 flex-1">
                         <Avatar className="h-10 w-10">
-                          <AvatarFallback>
-                            {appointment.name.split(' ').map(n => n[0]).join('')}
+                          <AvatarFallback className="bg-primary/10 text-primary">
+                            {appointment.fullName.split(' ').map(n => n[0]).join('').toUpperCase()}
                           </AvatarFallback>
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
-                            <p className="font-medium truncate">{appointment.name}</p>
+                            <p className="font-medium truncate">{appointment.fullName}</p>
                             {getStatusBadge(appointment.status)}
                           </div>
-                          <p className="text-sm font-medium text-primary">{appointment.eventType}</p>
+                          <p className="text-sm font-medium text-primary">
+                            {formatEventType(appointment.eventType)}
+                          </p>
                           <p className="text-sm text-muted-foreground">
-                            {formatDate(appointment.preferredDate)} at {formatTime(appointment.preferredTime)}
+                            {formatDate(appointment.eventDate)} at {appointment.eventTime}
+                          </p>
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Submitted: {formatDateTime(appointment.createdAt)}
                           </p>
                           {appointment.message && (
                             <p className="text-xs text-muted-foreground mt-1 truncate">
@@ -411,6 +482,7 @@ const AdminDashboardPage = () => {
                             variant="outline"
                             className="h-8 w-8 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
                             onClick={() => handleAppointmentAction(appointment.id, 'approve')}
+                            disabled={refreshing}
                           >
                             <CheckCircle className="w-4 h-4" />
                           </Button>
@@ -419,6 +491,7 @@ const AdminDashboardPage = () => {
                             variant="outline"
                             className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
                             onClick={() => handleAppointmentAction(appointment.id, 'reject')}
+                            disabled={refreshing}
                           >
                             <XCircle className="w-4 h-4" />
                           </Button>
@@ -431,27 +504,53 @@ const AdminDashboardPage = () => {
             </CardContent>
           </Card>
 
-          {/* Recent Events */}
+          {/* System Status */}
           <Card>
             <CardHeader>
-              <CardTitle>Recently Posted Events</CardTitle>
-              <CardDescription>Visible to all parishioners</CardDescription>
+              <CardTitle>System Status</CardTitle>
+              <CardDescription>Current platform statistics</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
-                {[
-                  { title: "Feast of Christ the King", date: "Nov 24, 2025", attendees: "500+" },
-                  { title: "Advent Recollection", date: "Dec 7, 2025", attendees: "120" },
-                  { title: "Simbang Gabi Schedule", date: "Dec 16–24, 2025", attendees: "All" },
-                ].map((event, i) => (
-                  <div key={i} className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-                    <div>
-                      <p className="font-medium">{event.title}</p>
-                      <p className="text-sm text-muted-foreground">{event.date}</p>
-                    </div>
-                    <Badge variant="outline">{event.attendees} expected</Badge>
+                <div className="flex items-center justify-between p-3 rounded-lg bg-green-50 border border-green-200">
+                  <div>
+                    <p className="font-medium text-green-800">System Online</p>
+                    <p className="text-sm text-green-600">All services operational</p>
                   </div>
-                ))}
+                  <Badge variant="outline" className="bg-green-100 text-green-800">
+                    Active
+                  </Badge>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Database Connection</span>
+                    <Badge variant="outline" className="bg-green-100 text-green-800">
+                      Connected
+                    </Badge>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Real-time Updates</span>
+                    <Badge variant="outline" className="bg-green-100 text-green-800">
+                      Enabled
+                    </Badge>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-muted-foreground">Email Service</span>
+                    <Badge variant="outline" className="bg-green-100 text-green-800">
+                      Active
+                    </Badge>
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="text-center">
+                  <p className="text-sm text-muted-foreground mb-2">Last Updated</p>
+                  <p className="text-sm font-medium">
+                    {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
               </div>
             </CardContent>
           </Card>

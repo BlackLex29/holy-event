@@ -1,4 +1,3 @@
-// app/c/about/page.tsx
 'use client';
 
 import React from 'react';
@@ -8,51 +7,21 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { 
   Church,
-  Clock,
   Heart,
   Calendar,
-  Cross
+  MapPin,
+  Users
 } from 'lucide-react';
 
 export default function AboutChurchPage() {
-  const massSchedules = [
-    { day: 'Sunday', times: ['9:00 AM', '11:00 AM'] },
-    { day: 'Monday, Tuesday, Thursday', times: ['6:15 AM'] },
-    { day: 'Wednesday - Friday', times: ['5:00 PM'] },
-    { day: 'Saturday', times: ['6:15 AM', '5:30 PM'] }
-  ];
-
-  const sacraments = [
-    { 
-      name: 'Baptism', 
-      schedule: 'Every Saturday at 2:00 PM', 
-      requirement: 'Pre-Baptism Seminar required',
-      icon: Cross
-    },
-    { 
-      name: 'Wedding', 
-      schedule: 'By appointment', 
-      requirement: '6 months preparation',
-      icon: Heart
-    },
-    { 
-      name: 'Confession', 
-      schedule: '30 minutes before Mass or by appointment', 
-      requirement: '',
-      icon: Cross
-    },
-    { 
-      name: 'First Communion', 
-      schedule: 'During Sunday Mass', 
-      requirement: '1 year catechism',
-      icon: Cross
-    },
-    { 
-      name: 'Confirmation', 
-      schedule: 'Annual celebration', 
-      requirement: '2 years preparation',
-      icon: Cross
-    }
+  const barangays = [
+    'Brgy. Santor',
+    'Brgy. Janopol Occidental', 
+    'Brgy. Gonzales',
+    'Brgy. Talaga',
+    'Brgy. Bañadero',
+    'Brgy. Ambulong',
+    'Brgy. Maugat'
   ];
 
   return (
@@ -71,15 +40,7 @@ export default function AboutChurchPage() {
               "To seek God and to find Him in all things"
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <Badge variant="secondary" className="text-lg px-4 py-2">
-                Founded 1950
-              </Badge>
-              <Badge variant="secondary" className="text-lg px-4 py-2">
-                Catholic Diocese
-              </Badge>
-              <Badge variant="secondary" className="text-lg px-4 py-2">
-                Community of Faith
-              </Badge>
+              {/* Badges removed as requested */}
             </div>
           </div>
         </div>
@@ -99,7 +60,7 @@ export default function AboutChurchPage() {
                       the Gospel of Jesus Christ through worship, service, and fellowship. 
                     </p>
                     <p className="text-lg leading-relaxed">
-                      For over 70 years, we have been a beacon of faith, hope, and love in our community, 
+                      For over 11 years, we have been a beacon of faith, hope, and love in our community, 
                       nurturing spiritual growth and serving those in need.
                     </p>
                   </div>
@@ -118,18 +79,66 @@ export default function AboutChurchPage() {
               <div className="relative">
                 <div className="bg-muted rounded-2xl h-96 w-full flex items-center justify-center shadow-lg overflow-hidden">
                   <img 
-                    src="/church.jpg" 
-                    alt="Saint Augustine Church"
-                    className="w-full h-full object-cover"
+                    src="/1.jpg" 
+                    alt="Saint Augustine Church Building"
+                    className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
                     onError={(e) => {
-                      e.currentTarget.style.display = 'none';
+                      // Fallback image if primary fails
+                      e.currentTarget.src = "/images/church-exterior.jpg";
                     }}
                   />
-                  <div className="absolute inset-0 flex items-center justify-center bg-muted">
-                    <div className="text-center">
-                      <Church className="h-20 w-20 text-muted-foreground/50 mx-auto mb-4" />
-                      <p className="text-muted-foreground text-lg">Church Image</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* History Section */}
+        <section className="mb-20">
+          <div className="max-w-6xl mx-auto">
+            <div className="grid lg:grid-cols-2 gap-12 items-center">
+              <div className="space-y-6">
+                <h2 className="text-3xl font-bold mb-4">Our History</h2>
+                <div className="space-y-4 text-muted-foreground">
+                  <p className="text-lg leading-relaxed">
+                    On July 16, 2014, eight barangays in Tanauan City were created through a Decree of 
+                    Canonical Erection by the Roman Catholic Archbishop of Lipa, Most Reverend Ramon C. 
+                    Arguelles, D.D. as the Parish of St. Augustine of Hippo.
+                  </p>
+                  <p className="text-lg leading-relaxed">
+                    The titular patron St. Augustine of Hippo was chosen because of his great contribution 
+                    in understanding the truths about the doctrine of the church and in honor of the first 
+                    missionaries who sow the seed of faith to the entire archdiocese - the Augustinian Friars.
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-6">
+                <div className="flex items-start gap-4">
+                  <MapPin className="w-6 h-6 text-primary mt-1" />
+                  <div>
+                    <h3 className="font-semibold text-lg mb-2">Location & Coverage</h3>
+                    <p className="text-muted-foreground mb-4">
+                      Located in the western part of Tanauan City along Tanauan-Talisay Road, 
+                      serving approximately 25,000 residents.
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {barangays.map((barangay, index) => (
+                        <div key={index} className="flex items-center gap-2">
+                          <div className="w-2 h-2 bg-primary rounded-full"></div>
+                          <span className="text-sm text-muted-foreground">{barangay}</span>
+                        </div>
+                      ))}
                     </div>
+                  </div>
+                </div>
+                <div className="flex items-start gap-4">
+                  <Users className="w-6 h-6 text-primary mt-1" />
+                  <div>
+                    <h3 className="font-semibold text-lg mb-2">Community</h3>
+                    <p className="text-muted-foreground">
+                      A great number of Christians belong to the Roman Catholic Church with 
+                      minority belonging to non-Christian denominations.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -137,105 +146,57 @@ export default function AboutChurchPage() {
           </div>
         </section>
 
-        <Separator className="my-16" />
-
-        {/* Mass Schedule */}
+        {/* Additional Church Images Section */}
         <section className="mb-20">
-          <div className="max-w-4xl mx-auto text-center mb-12">
-            <h2 className="text-3xl font-bold mb-4">Mass Schedule</h2>
-            <p className="text-lg text-muted-foreground">
-              Join us in celebration of the Holy Eucharist
-            </p>
-          </div>
-          
           <div className="max-w-6xl mx-auto">
-            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {massSchedules.map((schedule, index) => (
-                <Card key={index} className="text-center hover:shadow-lg transition-shadow">
-                  <CardHeader className="pb-4">
-                    <CardTitle className="flex items-center justify-center gap-3 text-lg">
-                      <Clock className="w-5 h-5 text-primary" />
-                      {schedule.day}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {schedule.times.map((time, timeIndex) => (
-                        <div key={timeIndex} className="p-3 bg-muted/50 rounded-lg border">
-                          <span className="font-semibold text-primary">{time}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        {/* Sacraments */}
-        <section className="mb-20">
-          <div className="max-w-4xl mx-auto text-center mb-12">
-            <h2 className="text-3xl font-bold mb-4">Sacraments</h2>
-            <p className="text-lg text-muted-foreground">
-              Channels of God's grace for our spiritual journey
-            </p>
-          </div>
-
-          <div className="max-w-6xl mx-auto">
-            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {sacraments.map((sacrament, index) => {
-                const IconComponent = sacrament.icon;
-                return (
-                  <Card key={index} className="text-center hover:shadow-lg transition-shadow">
-                    <CardHeader className="pb-4">
-                      <CardTitle className="flex items-center justify-center gap-3 text-lg">
-                        <IconComponent className="w-5 h-5 text-primary" />
-                        {sacrament.name}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="p-3 bg-primary/10 rounded-lg border">
-                        <p className="font-semibold text-sm text-primary mb-1">Schedule</p>
-                        <p className="text-sm text-muted-foreground">{sacrament.schedule}</p>
-                      </div>
-                      {sacrament.requirement && (
-                        <div className="p-3 bg-muted/50 rounded-lg border">
-                          <p className="font-semibold text-sm mb-1">Requirements</p>
-                          <p className="text-sm text-muted-foreground">{sacrament.requirement}</p>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                );
-              })}
-            </div>
-          </div>    
-        </section>
-
-        {/* Final Call to Action */}
-        <section>
-          <div className="max-w-4xl mx-auto">
-            <Card className="bg-primary text-primary-foreground text-center">
-              <CardContent className="p-12">
-                <Church className="h-16 w-16 mx-auto mb-6" />
-                <h2 className="text-3xl font-bold mb-4">Become Part of Our Family</h2>
-                <p className="text-xl mb-8 opacity-90 leading-relaxed">
-                  Whether you're new to the area or seeking a spiritual home, 
-                  we welcome you with open arms.
-                </p>
-                <div className="flex flex-wrap justify-center gap-4">
-                  <Button size="lg" variant="secondary" className="gap-3 px-8">
-                    <Heart className="w-5 h-5" />
-                    Join Our Community
-                  </Button>
-                  <Button size="lg" variant="outline" className="text-primary-foreground border-primary-foreground gap-3 px-8 hover:bg-primary-foreground hover:text-primary">
-                    <Calendar className="w-5 h-5" />
-                    View Mass Schedule
-                  </Button>
+            <h2 className="text-3xl font-bold mb-8 text-center">Our Sacred Space</h2>
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="bg-muted rounded-xl overflow-hidden shadow-lg">
+                <img 
+                  src="/1.jpg" 
+                  alt="Church Interior"
+                  className="w-full h-64 object-cover transition-transform duration-300 hover:scale-105"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                  }}
+                />
+                <div className="hidden p-4 text-center bg-muted">
+                  <Church className="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-muted-foreground">Church Interior</p>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+              <div className="bg-muted rounded-xl overflow-hidden shadow-lg">
+                <img 
+                  src="/3.jpg" 
+                  alt="Main Altar"
+                  className="w-full h-64 object-cover transition-transform duration-300 hover:scale-105"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                  }}
+                />
+                <div className="hidden p-4 text-center bg-muted">
+                  <Church className="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-muted-foreground">Main Altar</p>
+                </div>
+              </div>
+              <div className="bg-muted rounded-xl overflow-hidden shadow-lg">
+                <img 
+                  src="/2.jpg" 
+                  alt="Church Community"
+                  className="w-full h-64 object-cover transition-transform duration-300 hover:scale-105"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                  }}
+                />
+                <div className="hidden p-4 text-center bg-muted">
+                  <Users className="h-12 w-12 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-muted-foreground">Our Community</p>
+                </div>
+              </div>
+            </div>
           </div>
         </section>
       </div>

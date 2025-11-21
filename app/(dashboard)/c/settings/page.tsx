@@ -17,7 +17,7 @@ import {
     TotpMultiFactorGenerator,
     TotpSecret,
     onAuthStateChanged,
-    signOut, // ← Added
+    signOut,
 } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase-config';
@@ -238,7 +238,7 @@ const ClientSettingPage = () => {
         setLoading(true);
         try {
             await signOut(auth);
-            router.push('/login'); // or wherever your login page is
+            router.push('/login');
         } catch (err: any) {
             showMessage(err.message || 'Logout failed.', true);
         } finally {

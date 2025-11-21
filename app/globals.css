@@ -44,99 +44,116 @@
 }
 
 :root {
-  --radius: 0.625rem;
+  --radius: 0.65rem;
 
-  /* Backgrounds */
+  /* SOFT BLUE-GRAY BASE - Much easier on the eyes */
+  --background: oklch(0.96 0.01 240);  /* soft off-white with hint of blue */
+  --foreground: oklch(0.25 0.02 240);  /* dark gray-blue text */
 
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  /* Surfaces - subtle depth */
+  --card: oklch(0.98 0.005 240);
+  --card-foreground: oklch(0.25 0.02 240);
 
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
+  --popover: oklch(0.98 0.005 240);
+  --popover-foreground: oklch(0.25 0.02 240);
 
-  /* Main Brand Colors */
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
+  /* PRIMARY — Soft Blue (not too bright) */
+  --primary: oklch(0.58 0.10 240);
+  --primary-foreground: oklch(0.98 0.01 240);
 
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
+  /* SECONDARY — Light blue-gray */
+  --secondary: oklch(0.90 0.02 240);
+  --secondary-foreground: oklch(0.25 0.02 240);
 
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+  /* Muted (comfortable mid-tone) */
+  --muted: oklch(0.92 0.01 240);
+  --muted-foreground: oklch(0.50 0.03 240);
 
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* Accent — Gentle blue highlight */
+  --accent: oklch(0.88 0.03 240);
+  --accent-foreground: oklch(0.25 0.02 240);
 
-  /* Alerts */
-  --destructive: oklch(0.577 0.245 27.325);
+  /* Danger - softer red */
+  --destructive: oklch(0.58 0.15 25);
+  --destructive-foreground: oklch(0.98 0 0);
 
-  /* Components */
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* Borders / Inputs - soft and subtle */
+  --border: oklch(0.88 0.01 240);
+  --input: oklch(0.94 0.01 240);
+  --ring: oklch(0.58 0.10 240);
 
-  /* Charts */
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
+  /* Charts (harmonious blue palette) */
+  --chart-1: oklch(0.58 0.10 240);
+  --chart-2: oklch(0.52 0.12 220);
+  --chart-3: oklch(0.48 0.10 200);
+  --chart-4: oklch(0.55 0.08 260);
+  --chart-5: oklch(0.62 0.06 280);
 
-  /* Sidebar */
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  /* Sidebar - slightly darker for contrast but not harsh */
+  --sidebar: oklch(0.94 0.01 240);
+  --sidebar-foreground: oklch(0.25 0.02 240);
+  --sidebar-primary: oklch(0.58 0.10 240);
+  --sidebar-primary-foreground: oklch(0.98 0.01 240);
+  --sidebar-accent: oklch(0.88 0.03 240);
+  --sidebar-accent-foreground: oklch(0.25 0.02 240);
+  --sidebar-border: oklch(0.88 0.01 240);
+  --sidebar-ring: oklch(0.58 0.10 240);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
+  --radius: 0.65rem;
 
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
+  /* DARK MODE - Softer, warmer dark blue */
+  --background: oklch(0.25 0.02 250);  /* gentle dark blue-gray */
+  --foreground: oklch(0.92 0.01 240);  /* soft white */
 
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
+  /* Surfaces - subtle elevation */
+  --card: oklch(0.30 0.02 250);
+  --card-foreground: oklch(0.92 0.01 240);
 
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
+  --popover: oklch(0.30 0.02 250);
+  --popover-foreground: oklch(0.92 0.01 240);
 
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
+  /* GOLD - Warmer, softer gold */
+  --primary: oklch(0.75 0.12 85);
+  --primary-foreground: oklch(0.20 0.02 250);
 
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
+  /* Secondary - warm champagne */
+  --secondary: oklch(0.38 0.03 250);
+  --secondary-foreground: oklch(0.92 0.01 240);
 
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
+  /* Muted - comfortable mid-tone */
+  --muted: oklch(0.32 0.02 250);
+  --muted-foreground: oklch(0.70 0.03 240);
 
-  --destructive: oklch(0.704 0.191 22.216);
+  /* Accent - soft warm glow */
+  --accent: oklch(0.40 0.03 250);
+  --accent-foreground: oklch(0.92 0.01 240);
 
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  /* Danger - softer red */
+  --destructive: oklch(0.55 0.15 25);
 
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
+  /* Borders / Inputs - subtle but visible */
+  --border: oklch(0.35 0.02 250);
+  --input: oklch(0.32 0.02 250);
+  --ring: oklch(0.75 0.12 85);
 
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Charts - warm harmonious palette */
+  --chart-1: oklch(0.75 0.12 85);
+  --chart-2: oklch(0.68 0.10 75);
+  --chart-3: oklch(0.62 0.08 65);
+  --chart-4: oklch(0.58 0.10 240);
+  --chart-5: oklch(0.55 0.08 220);
+
+  /* Sidebar - slightly darker for hierarchy */
+  --sidebar: oklch(0.22 0.02 250);
+  --sidebar-foreground: oklch(0.92 0.01 240);
+  --sidebar-primary: oklch(0.75 0.12 85);
+  --sidebar-primary-foreground: oklch(0.20 0.02 250);
+  --sidebar-accent: oklch(0.40 0.03 250);
+  --sidebar-accent-foreground: oklch(0.92 0.01 240);
+  --sidebar-border: oklch(0.35 0.02 250);
+  --sidebar-ring: oklch(0.75 0.12 85);
 }
 
 @layer base {
@@ -146,5 +163,8 @@
 
   body {
     @apply bg-background text-foreground;
+    /* Smoother text rendering for better readability */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }

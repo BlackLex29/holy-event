@@ -45,11 +45,11 @@ export const AppSidebar = () => {
 
   // === ADMIN MENU: NOW WITH DASHBOARD AT TOP ===
   const adminMenuItems = [
-    { title: 'Dashboard', icon: LayoutDashboard, href: '/a/dashboard' }, // ← NEW: Dashboard on top
+    { title: 'Dashboard', icon: LayoutDashboard, href: '/a/dashboard' },
     { title: 'Manage Users', icon: Users, href: '/a/users' },
     { title: 'Manage Appointments', icon: Calendar, href: '/a/appointments' },
     { title: 'Post Events', icon: PlusCircle, href: '/a/events' },
-    { title: 'Settings', icon: Settings, href: '/a/settings' },
+    { title: 'Profile', icon: Settings, href: '/a/settings' },
   ];
 
   const handleLogout = async () => {
@@ -86,7 +86,7 @@ export const AppSidebar = () => {
       </SidebarHeader>
 
       <SidebarContent className="pt-2">
-        {/* ADMIN MENU – Dashboard on top */}
+        {/* ADMIN MENU */}
         {isAdmin && (
           <SidebarGroup>
             <SidebarGroupContent>

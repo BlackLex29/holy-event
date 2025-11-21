@@ -25,18 +25,18 @@ export default function ChurchLanding() {
       <nav className="fixed top-0 w-full z-50 px-6 py-4 bg-white/90 backdrop-blur-sm border-b border-sky-200 shadow-sm">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           {/* Logo */}
-          <Link href="/" className="text-2xl font-bold bg-gradient-to-r from-sky-500 to-blue-600 bg-clip-text text-transparent">
-            Holy Event
+          <Link href="/" className="flex items-center gap-3">
+            <Image
+              src="/logo.jpg" // Ipalit mo to sa actual na logo path
+              alt="Holy Event Logo"
+              width={40}
+              height={40}
+              className="rounded-lg"
+            />
+            <span className="text-2xl font-bold bg-gradient-to-r from-sky-500 to-blue-600 bg-clip-text text-transparent">
+              Holy Event
+            </span>
           </Link>
-
-          {/* Desktop Menu */}
-          <div className="hidden md:flex items-center gap-8">
-            <Link href="/" className="hover:text-sky-600 transition font-medium">Home</Link>
-            <Link href="/discover" className="hover:text-sky-600 transition font-medium">Discover</Link>
-            <Link href="/services" className="hover:text-sky-600 transition font-medium">Services</Link>
-            <Link href="/connect" className="hover:text-sky-600 transition font-medium">Connect Groups</Link>
-            <Link href="/about" className="hover:text-sky-600 transition font-medium">About Us</Link>
-          </div>
 
           {/* Desktop Auth Buttons */}
           <div className="hidden md:flex items-center gap-4">
@@ -69,14 +69,7 @@ export default function ChurchLanding() {
         {/* Mobile Menu */}
         {mobileMenuOpen && (
           <div className="md:hidden absolute top-full left-0 w-full bg-white/95 backdrop-blur-md border-b border-sky-200 shadow-lg px-6 py-6 space-y-6">
-            <div className="space-y-4">
-              <Link href="/" className="block hover:text-sky-600 transition font-medium">Home</Link>
-              <Link href="/discover" className="block hover:text-sky-600 transition font-medium">Discover</Link>
-              <Link href="/services" className="block hover:text-sky-600 transition font-medium">Services</Link>
-              <Link href="/connect" className="block hover:text-sky-600 transition font-medium">Connect Groups</Link>
-              <Link href="/about" className="block hover:text-sky-600 transition font-medium">About Us</Link>
-            </div>
-            <div className="flex flex-col gap-3 pt-4 border-t border-sky-200">
+            <div className="flex flex-col gap-3 pt-4">
               <Button
                 variant="ghost"
                 onClick={handleLogin}
@@ -140,7 +133,7 @@ export default function ChurchLanding() {
             {/* Large bottom image */}
             <div className="absolute bottom-0 left-0 w-3/4 h-2/3 rounded-2xl overflow-hidden shadow-2xl border border-sky-200">
               <Image
-                src="/church-community-worship.png"
+                src="/1.jpg"
                 alt="Church worship"
                 fill
                 className="object-cover"
@@ -151,7 +144,7 @@ export default function ChurchLanding() {
             {/* Top right smaller images */}
             <div className="absolute top-0 right-0 w-1/2 h-1/2 rounded-2xl overflow-hidden shadow-2xl border border-sky-200">
               <Image
-                src="/church-gathering-faith.jpg"
+                src="/3.jpg"
                 alt="Church gathering"
                 fill
                 className="object-cover"
@@ -162,7 +155,7 @@ export default function ChurchLanding() {
             {/* Middle right image */}
             <div className="absolute top-1/3 right-0 w-2/5 h-1/3 rounded-2xl overflow-hidden shadow-2xl border border-sky-200 z-10">
               <Image
-                src="/church-prayer-spiritual.jpg"
+                src="/2.jpg"
                 alt="Church prayer"
                 fill
                 className="object-cover"

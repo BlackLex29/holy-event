@@ -14,9 +14,7 @@ import {
   Heart,
   CheckCircle,
   XCircle,
-  CalendarDays,
-  Phone,
-  Mail
+  CalendarDays
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
@@ -28,6 +26,7 @@ interface Appointment {
   eventTime: string;
   status: 'pending' | 'approved' | 'rejected';
   submittedAt: string;
+  email: string;
 }
 
 interface ChurchEvent {
@@ -39,32 +38,70 @@ interface ChurchEvent {
   description: string;
 }
 
+interface UserData {
+  name: string;
+  email: string;
+  phone: string;
+  joinDate: string;
+  parishionerId: string;
+}
+
 export default function ClientDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<ChurchEvent[]>([]);
+  const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
-
-  // Mock user data - in real app, this would come from authentication
-  const userData = {
-    name: 'Maria Santos',
-    email: 'maria.santos@email.com',
-    phone: '+639171234567',
-    joinDate: 'January 2024',
-    parishionerId: 'P-2024-00123'
-  };
 
   useEffect(() => {
     const fetchDashboardData = () => {
       try {
         setLoading(true);
         
+        // Get user data from localStorage or authentication context
+        const storedUser = localStorage.getItem('currentUser');
+        let currentUser: UserData;
+
+        if (storedUser) {
+          currentUser = JSON.parse(storedUser);
+        } else {
+          // Fallback: Get user from appointments or use default
+          const storedAppointments = localStorage.getItem('appointments');
+          const appointments: Appointment[] = storedAppointments ? JSON.parse(storedAppointments) : [];
+          
+          if (appointments.length > 0) {
+            // Use the first appointment's user data
+            const latestAppointment = appointments[0];
+            currentUser = {
+              name: latestAppointment.email.split('@')[0], // Use email username as fallback name
+              email: latestAppointment.email,
+              phone: '+639171234567',
+              joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+              parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
+            };
+          } else {
+            // Default user data if no appointments found
+            currentUser = {
+              name: 'Parishioner',
+              email: 'user@example.com',
+              phone: '+639171234567',
+              joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+              parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
+            };
+          }
+          
+          // Save user to localStorage for future use
+          localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        }
+
+        setUserData(currentUser);
+
         // Get appointments from localStorage
         const storedAppointments = localStorage.getItem('appointments');
         const userAppointments: Appointment[] = storedAppointments 
           ? JSON.parse(storedAppointments)
-              .filter((apt: any) => apt.email === userData.email)
-              .sort((a: any, b: any) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
+              .filter((apt: Appointment) => apt.email === currentUser.email)
+              .sort((a: Appointment, b: Appointment) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
           : [];
 
         setAppointments(userAppointments.slice(0, 3)); // Show only latest 3
@@ -82,6 +119,13 @@ export default function ClientDashboardPage() {
         console.error('Error fetching dashboard data:', error);
         
         // Fallback mock data
+        setUserData({
+          name: 'Parishioner',
+          email: 'user@example.com',
+          phone: '+639171234567',
+          joinDate: 'January 2024',
+          parishionerId: 'P-2024-00123'
+        });
         setAppointments(getMockAppointments());
         setUpcomingEvents(getMockEvents());
       } finally {
@@ -99,7 +143,8 @@ export default function ClientDashboardPage() {
       eventDate: '2025-11-18',
       eventTime: '09:00 AM',
       status: 'approved',
-      submittedAt: '2025-11-15T10:30:00Z'
+      submittedAt: '2025-11-15T10:30:00Z',
+      email: 'user@example.com'
     },
     {
       id: '2',
@@ -107,7 +152,8 @@ export default function ClientDashboardPage() {
       eventDate: '2025-12-01',
       eventTime: '02:00 PM',
       status: 'approved',
-      submittedAt: '2025-11-14T14:20:00Z'
+      submittedAt: '2025-11-14T14:20:00Z',
+      email: 'user@example.com'
     }
   ];
 
@@ -169,6 +215,21 @@ export default function ClientDashboardPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
           <p className="mt-4 text-muted-foreground">Loading your dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!userData) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <Church className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
+          <h2 className="text-2xl font-bold mb-2">User Not Found</h2>
+          <p className="text-muted-foreground mb-4">Please log in to access your dashboard.</p>
+          <Button asChild>
+            <Link href="/login">Go to Login</Link>
+          </Button>
         </div>
       </div>
     );
@@ -314,16 +375,6 @@ export default function ClientDashboardPage() {
                         <span>{upcomingAppointment.eventTime}</span>
                       </p>
                     </div>
-                    <div className="flex gap-2 mt-4">
-                      <Button size="sm" variant="outline" className="gap-2">
-                        <Calendar className="w-4 h-4" />
-                        Add to Calendar
-                      </Button>
-                      <Button size="sm" variant="outline" className="gap-2">
-                        <Phone className="w-4 h-4" />
-                        Contact Church
-                      </Button>
-                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -414,43 +465,6 @@ export default function ClientDashboardPage() {
                     ))
                   )}
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* Quick Contact */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Need Help?</CardTitle>
-                <CardDescription>We're here to assist you</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="flex items-center gap-3 p-3 rounded-lg border">
-                    <Phone className="w-5 h-5 text-primary" />
-                    <div>
-                      <p className="font-medium">Call Us</p>
-                      <p className="text-sm text-muted-foreground">(02) 8123-4567</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-3 rounded-lg border">
-                    <Mail className="w-5 h-5 text-primary" />
-                    <div>
-                      <p className="font-medium">Email Us</p>
-                      <p className="text-sm text-muted-foreground">info@staugustineparish.ph</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-3 p-3 rounded-lg border">
-                    <Clock className="w-5 h-5 text-primary" />
-                    <div>
-                      <p className="font-medium">Office Hours</p>
-                      <p className="text-sm text-muted-foreground">Mon-Fri: 8AM-5PM</p>
-                    </div>
-                  </div>
-                </div>
-                <Button className="w-full mt-4 gap-2">
-                  <Mail className="w-4 h-4" />
-                  Contact Church
-                </Button>
               </CardContent>
             </Card>
           </div>

@@ -33,7 +33,7 @@ import {
   CheckCircle,
   XCircle,
 } from 'lucide-react';
-import { collection, addDoc, serverTimestamp, FieldValue } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase-config';
 import {
   Card,
@@ -50,23 +50,9 @@ interface ChurchEvent {
   location: string;
   priest?: string;
   status: 'active' | 'cancelled';
-  postedAt: FieldValue;
-  createdAt: FieldValue;
-  updatedAt: FieldValue;
-}
-
-interface EventFormData {
-  type: string;
-  title: string;
-  description: string;
-  date: string;
-  time: string;
-  location: string;
-  priest?: string;
-  status: 'active' | 'cancelled';
-  postedAt: FieldValue;
-  createdAt: FieldValue;
-  updatedAt: FieldValue;
+  postedAt: any;
+  createdAt: any;
+  updatedAt: any;
 }
 
 const churchEvents = [
@@ -78,6 +64,9 @@ const churchEvents = [
   { value: 'funeral', label: 'Funeral Mass', icon: Crosshair },
   { value: 'adoration', label: 'Adoration', icon: Sun },
   { value: 'recollection', label: 'Recollection', icon: BookOpen },
+  { value: 'fiesta', label: 'Barangay Fiesta', icon: ChurchIcon },
+  { value: 'simbang-gabi', label: 'Simbang Gabi', icon: ChurchIcon },
+  { value: 'school-mass', label: 'School Mass', icon: ChurchIcon },
 ];
 
 export default function PostChurchEvent() {
@@ -122,8 +111,8 @@ export default function PostChurchEvent() {
     setIsSubmitting(true);
 
     try {
-      // Gumawa ng event object na may tamang type
-      const eventData: EventFormData = {
+      // Gumawa ng event object
+      const eventData: ChurchEvent = {
         type: eventType,
         title: formData.title.trim(),
         description: formData.description.trim(),
@@ -143,10 +132,21 @@ export default function PostChurchEvent() {
 
       console.log('📤 Submitting event to Firestore:', eventData);
 
-      // I-save sa Firestore
+      // I-save sa Firestore sa "events" collection
       const docRef = await addDoc(collection(db, 'events'), eventData);
 
       console.log('✅ Event saved to Firestore with ID:', docRef.id);
+
+      // I-save din sa localStorage para sa dashboard (fallback)
+      const existingEvents = JSON.parse(localStorage.getItem('churchEvents') || '[]');
+      const newEvent = {
+        ...eventData,
+        id: docRef.id,
+        postedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      localStorage.setItem('churchEvents', JSON.stringify([newEvent, ...existingEvents]));
 
       // Set success data
       setSuccessData({
@@ -208,7 +208,10 @@ export default function PostChurchEvent() {
       wedding: 'Wedding',
       funeral: 'Funeral Mass',
       adoration: 'Adoration',
-      recollection: 'Recollection'
+      recollection: 'Recollection',
+      fiesta: 'Barangay Fiesta',
+      'simbang-gabi': 'Simbang Gabi',
+      'school-mass': 'School Mass'
     };
     return eventTypeMap[eventType] || eventType;
   };

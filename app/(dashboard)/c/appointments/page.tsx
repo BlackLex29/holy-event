@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { format } from 'date-fns';
+import { format, isSunday } from 'date-fns';
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -10,10 +10,12 @@ import {
   Church,
   Phone,
   Mail,
-  Bell,
   CheckCircle,
   XCircle,
-  RefreshCw
+  FileText,
+  UserCheck,
+  FileCheck,
+  BookOpen,
 } from 'lucide-react';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -42,6 +44,7 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
 import { db } from '@/lib/firebase-config';
@@ -111,6 +114,7 @@ const allowedTimes: Record<string, string[]> = {
   wedding: ['10:00', '14:00', '16:00'],
   baptism: ['07:00', '15:00'],
   funeral: ['09:00', '13:00'],
+  confirmation: ['10:00', '14:00'],
 };
 
 // Event type mapping for display
@@ -119,32 +123,90 @@ const eventTypeMap: Record<string, string> = {
   wedding: 'Wedding',
   baptism: 'Baptism',
   funeral: 'Funeral Mass',
-  confession: 'Confession',
-  rosary: 'Holy Rosary',
-  adoration: 'Adoration',
-  recollection: 'Recollection'
+  confirmation: 'Confirmation',
 };
 
-// Event icons mapping
-const eventIcons: Record<string, any> = {
-  mass: Church,
-  wedding: Church,
-  baptism: Church,
-  funeral: Church,
-  confession: Church,
-  rosary: Church,
-  adoration: Church,
-  recollection: Church,
+// ==================== SERVICE REQUIREMENTS ====================
+const serviceRequirements = {
+  funeral: {
+    title: "Requirements for Catholic Funeral Service (Libing)",
+    icon: FileText,
+    items: [
+      "Death Certificate",
+      "Information about the deceased (name, age, address, parish)",
+      "Schedule coordination with the parish office",
+      "Payment for funeral mass or offering (varies per parish)",
+      "If burial is in a Catholic cemetery, burial permit",
+      "For bringing remains into the church: parish approval",
+      "Family's request form for funeral mass",
+      "Priest availability confirmation"
+    ]
+  },
+  wedding: {
+    title: "Requirements for Catholic Marriage (Kasal)",
+    icon: UserCheck,
+    items: [
+      "Baptismal Certificate (for marriage purposes)",
+      "Confirmation Certificate",
+      "Marriage License from the Local Civil Registrar",
+      "Certificate of No Marriage (CENOMAR)",
+      "Pre-Cana seminar",
+      "Canonical interview with the priest",
+      "Marriage Banns (announced in the parish for 3 consecutive Sundays)",
+      "List of sponsors (ninong/ninang)",
+      "Confession before the wedding",
+      "If applicable: Permission from bishop for mixed marriage (Catholic + non-Catholic)",
+      "If applicable: Certificate of Freedom to Marry (for OFW or abroad)",
+      "If applicable: Annulment/Death Certificate (if widow-widower or marriage was nullified)"
+    ]
+  },
+  baptism: {
+    title: "Requirements for Baptism (Binyag)",
+    icon: FileCheck,
+    items: [
+      "Birth Certificate of the child",
+      "Parents must be married in the Church or planning to marry (varies by parish)",
+      "Attendance in pre-baptism seminar (parents & godparents)",
+      "List of godparents (usually at least 1 Catholic godparent)",
+      "Godparents must have received Confirmation",
+      "Baptismal information form from the parish",
+      "Parent/guardian consent"
+    ]
+  },
+  confirmation: {
+    title: "Requirements for Confirmation (Kumpil)",
+    icon: BookOpen,
+    items: [
+      "Must be a baptized Catholic",
+      "Confirmation preparation classes or catechism",
+      "Must be in a state of grace (usually goes to confession before the ceremony)",
+      "Birth Certificate (Civil)",
+      "Baptismal Certificate (fresh copy from parish)",
+      "Sponsor / Godparent who is a practicing Catholic",
+      "Confirmation name (usually a saint's name)",
+      "Attendance in parish orientation or seminar",
+      "Parent/guardian consent (if minor)"
+    ]
+  },
+  mass: {
+    title: "Requirements for Holy Mass",
+    icon: Church,
+    items: [
+      "Schedule coordination with the parish office",
+      "Special intention request form",
+      "Offering/donation for the mass",
+      "Advance booking (at least 1 week before)",
+      "Confirmation from parish secretary"
+    ]
+  }
 };
 
 // ==================== MAIN COMPONENT ====================
 export default function EventAppointmentPage() {
   const { toast } = useToast();
-  const [events, setEvents] = useState<ChurchEvent[]>([]);
   const [date, setDate] = useState<Date | undefined>(undefined);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
-  const [isLoadingEvents, setIsLoadingEvents] = useState(true);
   const [successData, setSuccessData] = useState<{name: string; eventType: string; date: string; time: string} | null>(null);
 
   const {
@@ -174,139 +236,32 @@ export default function EventAppointmentPage() {
     }
   }, [eventType, eventTime, setValue, trigger]);
 
-  // Load upcoming events from Firebase Firestore with real-time updates
-  const loadEvents = async () => {
-    setIsLoadingEvents(true);
-    try {
+  // Disable non-Sunday dates for Baptism
+  const isDateDisabled = (date: Date) => {
+    if (eventType === 'baptism') {
+      return !isSunday(date);
+    }
+    return date < new Date();
+  };
+
+  // Auto-select next Sunday when Baptism is selected
+  useEffect(() => {
+    if (eventType === 'baptism' && (!date || !isSunday(date))) {
       const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = format(today, 'yyyy-MM-dd');
+      const nextSunday = new Date(today);
+      nextSunday.setDate(today.getDate() + (7 - today.getDay()));
+      nextSunday.setHours(0, 0, 0, 0);
       
-      console.log('🔍 Loading events from Firestore...');
-      console.log('📅 Today:', todayStr);
-      
-      const eventsQuery = query(
-        collection(db, 'events'),
-        where('date', '>=', todayStr),
-        orderBy('date', 'asc'),
-        orderBy('time', 'asc')
-      );
-      
-      const querySnapshot = await getDocs(eventsQuery);
-      console.log('📊 Query snapshot size:', querySnapshot.size);
-      
-      const eventsData: ChurchEvent[] = querySnapshot.docs.map(doc => {
-        const data = doc.data();
-        console.log('📄 Document data:', doc.id, data);
-        return {
-          id: doc.id,
-          type: data.type || '',
-          title: data.title || '',
-          description: data.description || '',
-          date: data.date || '',
-          time: data.time || '',
-          location: data.location || '',
-          priest: data.priest || '',
-          postedAt: data.postedAt || new Date(),
-        };
-      });
-      
-      console.log('✅ Final events data:', eventsData);
-      setEvents(eventsData);
-      
-    } catch (error: any) {
-      console.error('❌ Error loading events from Firestore:', error);
-      
-      // Fallback to localStorage if Firebase fails
-      try {
-        const saved = localStorage.getItem('churchEvents');
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          const today = new Date().toISOString().split('T')[0];
-          const futureEvents = parsed
-            .filter((event: any) => event.date >= today)
-            .sort((a: any, b: any) => {
-              const dateCompare = a.date.localeCompare(b.date);
-              if (dateCompare !== 0) return dateCompare;
-              return (a.time || '').localeCompare(b.time || '');
-            });
-          
-          console.log('📂 Loaded events from localStorage:', futureEvents.length);
-          setEvents(futureEvents);
-        } else {
-          setEvents([]);
-        }
-      } catch (e) {
-        console.error('❌ Failed to load events from localStorage:', e);
-        setEvents([]);
-      }
+      setDate(nextSunday);
+      setValue('eventDate', nextSunday);
+      trigger('eventDate');
       
       toast({
-        title: 'Notice',
-        description: 'Using cached events data',
-        variant: 'default',
+        title: 'Baptism Scheduled',
+        description: 'Automatically selected next Sunday for baptism',
       });
-    } finally {
-      setIsLoadingEvents(false);
     }
-  };
-
-  // Real-time listener for events
-  useEffect(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = format(today, 'yyyy-MM-dd');
-    
-    console.log('🎯 Setting up real-time listener for events...');
-    
-    const eventsQuery = query(
-      collection(db, 'events'),
-      where('date', '>=', todayStr),
-      orderBy('date', 'asc'),
-      orderBy('time', 'asc')
-    );
-    
-    const unsubscribe = onSnapshot(eventsQuery, 
-      (querySnapshot) => {
-        console.log('🔄 Real-time update received');
-        const eventsData: ChurchEvent[] = querySnapshot.docs.map(doc => {
-          const data = doc.data();
-          return {
-            id: doc.id,
-            type: data.type || '',
-            title: data.title || '',
-            description: data.description || '',
-            date: data.date || '',
-            time: data.time || '',
-            location: data.location || '',
-            priest: data.priest || '',
-            postedAt: data.postedAt || new Date(),
-          };
-        });
-        console.log('📈 Updated events count:', eventsData.length);
-        setEvents(eventsData);
-        setIsLoadingEvents(false);
-      },
-      (error) => {
-        console.error('❌ Error in real-time listener:', error);
-        setIsLoadingEvents(false);
-        
-        // Fallback to regular loading
-        loadEvents();
-      }
-    );
-    
-    return () => unsubscribe();
-  }, []);
-
-  // Refresh events handler
-  const handleRefreshEvents = () => {
-    loadEvents();
-    toast({
-      title: 'Refreshing',
-      description: 'Loading latest events...',
-    });
-  };
+  }, [eventType, date, setValue, trigger, toast]);
 
   // SUBMIT TO FIREBASE WITH SUCCESS MESSAGE
   const onSubmit = async (data: FormData) => {
@@ -448,35 +403,40 @@ export default function EventAppointmentPage() {
     return eventTypeMap[eventType] || eventType;
   };
 
-  const formatEventDate = (dateString: string): string => {
-    try {
-      return format(new Date(dateString), 'MMM d, yyyy');
-    } catch {
-      return dateString;
+  // Render requirements for selected event type
+  const renderRequirements = () => {
+    if (!eventType || !serviceRequirements[eventType as keyof typeof serviceRequirements]) {
+      return null;
     }
-  };
 
-  const getEventIcon = (eventType: string) => {
-    return eventIcons[eventType] || Church;
-  };
+    const requirements = serviceRequirements[eventType as keyof typeof serviceRequirements];
+    const IconComponent = requirements.icon;
 
-  const handleEventClick = (event: ChurchEvent) => {
-    // Auto-fill form when event is clicked
-    setValue('eventType', event.type);
-    if (event.date) {
-      try {
-        const eventDate = new Date(event.date);
-        setDate(eventDate);
-        setValue('eventDate', eventDate);
-      } catch (error) {
-        console.error('Error parsing event date:', error);
-      }
-    }
-    
-    toast({
-      title: 'Event Selected',
-      description: `${event.title} has been pre-filled`,
-    });
+    return (
+      <Card className="border-blue-200 bg-blue-50/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <IconComponent className="h-5 w-5 text-blue-600" />
+            {requirements.title}
+          </CardTitle>
+          <CardDescription>
+            Please prepare these documents and requirements
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ul className="space-y-2 text-sm">
+            {requirements.items.map((item, index) => (
+              <li key={index} className="flex items-start gap-2">
+                <Badge variant="outline" className="h-5 w-5 p-0 flex items-center justify-center text-xs mt-0.5 flex-shrink-0">
+                  {index + 1}
+                </Badge>
+                <span className="text-muted-foreground">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </CardContent>
+      </Card>
+    );
   };
 
   return (
@@ -494,6 +454,7 @@ export default function EventAppointmentPage() {
           </h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             Book your sacrament at church-approved times only.
+            {eventType === 'baptism' && ' Baptism is available every Sunday.'}
           </p>
         </div>
       </section>
@@ -538,108 +499,20 @@ export default function EventAppointmentPage() {
           </div>
         )}
 
-        <div className="grid md:grid-cols-3 gap-8">
-
-          {/* UPCOMING EVENTS SIDEBAR */}
-          <div className="md:col-span-1 order-2 md:order-1">
-            <Card className="h-full">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-                <div>
-                  <CardTitle className="flex items-center gap-2">
-                    <Bell className="h-5 w-5 text-primary" />
-                    Upcoming Events
-                  </CardTitle>
-                  <CardDescription>Posted by Church Admin</CardDescription>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleRefreshEvents}
-                  disabled={isLoadingEvents}
-                >
-                  <RefreshCw className={`h-4 w-4 ${isLoadingEvents ? 'animate-spin' : ''}`} />
-                </Button>
-              </CardHeader>
-              <CardContent className="space-y-4 max-h-96 overflow-y-auto">
-                {isLoadingEvents ? (
-                  <div className="flex justify-center py-8">
-                    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-                  </div>
-                ) : events.length === 0 ? (
-                  <div className="text-center text-muted-foreground py-8">
-                    <CalendarIcon className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                    <p>No upcoming events</p>
-                    <p className="text-sm">Check back later for new events</p>
-                  </div>
-                ) : (
-                  events.slice(0, 10).map((event: ChurchEvent) => {
-                    const EventIcon = getEventIcon(event.type);
-                    return (
-                      <div 
-                        key={event.id} 
-                        className="p-4 rounded-lg border bg-card hover:shadow-md transition-shadow cursor-pointer"
-                        onClick={() => handleEventClick(event)}
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="p-2 bg-primary/10 rounded-full">
-                            <EventIcon className="w-5 h-5 text-primary" />
-                          </div>
-                          <div className="flex-1">
-                            <div className="flex items-start justify-between">
-                              <h4 className="font-semibold text-sm leading-tight">{event.title}</h4>
-                              <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-full ml-2 flex-shrink-0">
-                                {formatEventType(event.type)}
-                              </span>
-                            </div>
-                            
-                            <p className="text-xs text-muted-foreground mt-2 flex items-center gap-1">
-                              <CalendarIcon className="w-3 h-3" />
-                              {formatEventDate(event.date)}
-                            </p>
-                            
-                            {event.time && (
-                              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                                <Clock className="w-3 h-3" />
-                                {formatTime(event.time)}
-                              </p>
-                            )}
-                            
-                            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                              <MapPin className="w-3 h-3" />
-                              {event.location}
-                            </p>
-                            
-                            {event.priest && (
-                              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                                <Users className="w-3 h-3" />
-                                {event.priest}
-                              </p>
-                            )}
-                            
-                            {event.description && (
-                              <p className="text-xs text-muted-foreground mt-2 line-clamp-2">
-                                {event.description}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
+        <div className="grid lg:grid-cols-4 gap-8">
           {/* BOOKING FORM */}
-          <div className="md:col-span-2 order-1 md:order-2">
+          <div className="lg:col-span-2">
             <Card>
               <CardHeader>
                 <CardTitle className="text-2xl">Book Your Appointment</CardTitle>
-                <CardDescription>
-                  Select event, date, and approved time slot. 
-                  {events.length > 0 && ' Click on events to pre-fill the form.'}
-                </CardDescription>
+<CardDescription>
+  Select event, date, and approved time slot.
+  <span className="font-bold block mt-1">
+    Note: After setting an appointment, complete all the required documents and submit them to the
+    church at least one (1) month before the chosen date of the service.
+  </span>
+  {eventType === 'baptism' && ' Baptism is available every Sunday only.'}
+</CardDescription>
               </CardHeader>
               <CardContent>
                 <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
@@ -662,12 +535,23 @@ export default function EventAppointmentPage() {
                       <SelectContent>
                         <SelectItem value="mass">Holy Mass (Special Intention)</SelectItem>
                         <SelectItem value="wedding">Wedding</SelectItem>
-                        <SelectItem value="baptism">Baptism</SelectItem>
+                        <SelectItem value="baptism">Baptism (Every Sunday)</SelectItem>
                         <SelectItem value="funeral">Funeral Mass</SelectItem>
+                        <SelectItem value="confirmation">Confirmation (Once a year)</SelectItem>
                       </SelectContent>
                     </Select>
                     {errors.eventType && (
                       <p className="text-sm text-destructive">{errors.eventType.message}</p>
+                    )}
+                    {eventType === 'baptism' && (
+                      <p className="text-sm text-blue-600 bg-blue-50 p-2 rounded">
+                        Baptism is available every Sunday at 7:00 AM and 3:00 PM
+                      </p>
+                    )}
+                    {eventType === 'confirmation' && (
+                      <p className="text-sm text-orange-600 bg-orange-50 p-2 rounded">
+                         Confirmation is scheduled once a year as a school event
+                      </p>
                     )}
                   </div>
 
@@ -714,6 +598,11 @@ export default function EventAppointmentPage() {
                   {/* DATE PICKER */}
                   <div className="space-y-2">
                     <Label>Preferred Date *</Label>
+                    {eventType === 'baptism' && (
+                      <p className="text-sm text-blue-600">
+                        📅 Only Sundays are available for baptism
+                      </p>
+                    )}
                     <Popover>
                       <PopoverTrigger asChild>
                         <Button
@@ -737,7 +626,7 @@ export default function EventAppointmentPage() {
                             if (d) setValue('eventDate', d);
                             trigger('eventDate');
                           }}
-                          disabled={(d) => d < new Date()}
+                          disabled={isDateDisabled}
                           initialFocus
                         />
                       </PopoverContent>
@@ -753,6 +642,9 @@ export default function EventAppointmentPage() {
                       <Label className="flex items-center gap-2">
                         <Clock className="w-4 h-4" />
                         Available Times *
+                        <span className="text-xs text-muted-foreground">
+                          (1 hour service limit)
+                        </span>
                       </Label>
                       <Select
                         value={eventTime}
@@ -768,7 +660,7 @@ export default function EventAppointmentPage() {
                         <SelectContent>
                           {allowedTimes[eventType]?.map((t) => (
                             <SelectItem key={t} value={t}>
-                              {formatTime(t)}
+                              {formatTime(t)} (1 hour)
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -829,9 +721,13 @@ export default function EventAppointmentPage() {
             </Card>
           </div>
 
-          {/* CONTACT & SCHEDULE INFO */}
-          <div className="md:col-span-3 lg:col-span-1 order-3">
-            <div className="space-y-6">
+          {/* RIGHT SIDEBAR */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* SERVICE REQUIREMENTS */}
+            {renderRequirements()}
+
+            {/* CONTACT & SCHEDULE INFO */}
+            <div className="grid md:grid-cols-2 gap-6">
               <Card>
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center gap-2">
@@ -866,7 +762,7 @@ export default function EventAppointmentPage() {
                   <ul className="text-sm space-y-2 text-muted-foreground">
                     <li className="flex items-start gap-2">
                       <span className="text-primary mt-1">•</span>
-                      <span><strong>Baptism:</strong> 7:00 AM, 3:00 PM</span>
+                      <span><strong>Baptism:</strong> Every Sunday at 7:00 AM, 3:00 PM</span>
                     </li>
                     <li className="flex items-start gap-2">
                       <span className="text-primary mt-1">•</span>
@@ -880,35 +776,38 @@ export default function EventAppointmentPage() {
                       <span className="text-primary mt-1">•</span>
                       <span><strong>Funeral:</strong> 9:00 AM, 1:00 PM</span>
                     </li>
+                    <li className="flex items-start gap-2">
+                      <span className="text-primary mt-1">•</span>
+                      <span><strong>Confirmation:</strong> Once a year (School Event)</span>
+                    </li>
                   </ul>
                 </CardContent>
               </Card>
-
-              {/* Events Stats */}
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Events Status</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-3 text-sm">
-                    <div className="flex justify-between items-center">
-                      <span className="text-muted-foreground">Loaded Events:</span>
-                      <span className="font-semibold">{events.length}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-muted-foreground">Last Updated:</span>
-                      <span className="font-semibold">{isLoadingEvents ? 'Loading...' : format(new Date(), 'h:mm a')}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-muted-foreground">Source:</span>
-                      <span className="font-semibold text-primary">Firestore</span>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
             </div>
-          </div>
 
+            {/* Service Information */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Service Information</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Service Duration:</span>
+                    <span className="font-semibold">1 hour maximum</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Booking Lead Time:</span>
+                    <span className="font-semibold">24 hours minimum</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Confirmation:</span>
+                    <span className="font-semibold text-primary">Within 24 hours</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </>
