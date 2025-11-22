@@ -38,9 +38,9 @@ export const AppSidebar = () => {
   const clientMenuItems = [
     { title: 'Dashboard', icon: LayoutDashboard, href: `${baseRoute}/dashboard` },
     { title: 'Event Appointment', icon: Calendar, href: `${baseRoute}/appointments` },
-    { title: 'Visual Tour', icon: MapPin, href: `${baseRoute}/tour` },
+    { title: 'Visual View', icon: MapPin, href: `${baseRoute}/tour` },
     { title: 'About Church', icon: Church, href: `${baseRoute}/about` },
-    { title: 'Settings', icon: Settings, href: `${baseRoute}/settings` },
+    { title: 'Profile', icon: Settings, href: `${baseRoute}/settings` },
   ];
 
   // === ADMIN MENU: NOW WITH DASHBOARD AT TOP ===
