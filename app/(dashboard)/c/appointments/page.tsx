@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { format, isSunday } from 'date-fns';
+import { format, isSunday, parseISO, isValid } from 'date-fns';
 import {
   Calendar as CalendarIcon,
   Clock,
@@ -51,12 +51,7 @@ import { db } from '@/lib/firebase-config';
 import { 
   collection, 
   addDoc, 
-  serverTimestamp, 
-  getDocs, 
-  query, 
-  orderBy,
-  where,
-  onSnapshot,
+  serverTimestamp,
   Timestamp,
   FieldValue 
 } from 'firebase/firestore';
@@ -111,6 +106,23 @@ interface AppointmentData {
   status: string;
   createdAt: FieldValue;
   updatedAt: FieldValue;
+  userId?: string; // Para ma-identify kung sino ang may-ari
+}
+
+interface UserAppointment {
+  id: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  eventType: string;
+  eventDate: string;
+  eventTime: string;
+  guestCount: string;
+  message?: string;
+  status: string;
+  createdAt: string;
+  firebaseId?: string;
+  userId?: string; // Para ma-identify kung sino ang may-ari
 }
 
 // ==================== ALLOWED TIMES ====================
@@ -206,6 +218,91 @@ const serviceRequirements = {
   }
 };
 
+// ==================== DATE HELPER FUNCTIONS ====================
+const safeFormatDate = (date: Date | string, formatStr: string): string => {
+  try {
+    let dateObj: Date;
+    
+    if (typeof date === 'string') {
+      dateObj = parseISO(date);
+      if (!isValid(dateObj)) {
+        const [year, month, day] = date.split('-').map(Number);
+        dateObj = new Date(year, month - 1, day);
+      }
+    } else {
+      dateObj = date;
+    }
+    
+    if (!isValid(dateObj)) {
+      return 'Invalid date';
+    }
+    
+    return format(dateObj, formatStr);
+  } catch (error) {
+    console.error('Date formatting error:', error);
+    return 'Invalid date';
+  }
+};
+
+const safeFormatTime = (time24: string): string => {
+  if (!time24) return '—';
+  
+  try {
+    const [h, m] = time24.split(':').map(Number);
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    
+    if (!isValid(d)) {
+      return time24;
+    }
+    
+    return format(d, 'h:mm a');
+  } catch (error) {
+    console.error('Time formatting error:', error);
+    return time24;
+  }
+};
+
+const parseEventDate = (dateString: string): Date | null => {
+  try {
+    const [year, month, day] = dateString.split('-').map(Number);
+    const date = new Date(year, month - 1, day);
+    
+    if (isValid(date)) {
+      return date;
+    }
+    
+    const isoDate = parseISO(dateString);
+    if (isValid(isoDate)) {
+      return isoDate;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Date parsing error:', error);
+    return null;
+  }
+};
+
+// ==================== USER ID MANAGEMENT ====================
+const getUserId = (): string => {
+  // Gumamit ng localStorage para sa user identification
+  let userId = localStorage.getItem('church_appointment_userId');
+  if (!userId) {
+    userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    localStorage.setItem('church_appointment_userId', userId);
+  }
+  return userId;
+};
+
+const getUserEmail = (): string | null => {
+  return localStorage.getItem('church_appointment_userEmail');
+};
+
+const setUserEmail = (email: string) => {
+  localStorage.setItem('church_appointment_userEmail', email);
+};
+
 // ==================== MAIN COMPONENT ====================
 export default function EventAppointmentPage() {
   const { toast } = useToast();
@@ -214,6 +311,8 @@ export default function EventAppointmentPage() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [successData, setSuccessData] = useState<{name: string; eventType: string; date: string; time: string} | null>(null);
   const [notesCount, setNotesCount] = useState(0);
+  const [userAppointments, setUserAppointments] = useState<UserAppointment[]>([]);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
 
   const {
     register,
@@ -235,11 +334,18 @@ export default function EventAppointmentPage() {
   const eventType = useWatch({ control, name: 'eventType' });
   const eventTime = useWatch({ control, name: 'eventTime' });
   const message = watch('message');
+  const email = watch('email');
 
   // Watch for message changes to update character count
   useEffect(() => {
     setNotesCount(message?.length || 0);
   }, [message]);
+
+  // Load user appointments from localStorage on component mount
+  useEffect(() => {
+    loadUserAppointments();
+    setCurrentUserEmail(getUserEmail());
+  }, []);
 
   // Auto-clear time when event type changes
   useEffect(() => {
@@ -278,10 +384,7 @@ export default function EventAppointmentPage() {
 
   // Phone number formatting
   const formatPhoneNumber = (value: string) => {
-    // Remove all non-digit characters
     const numbers = value.replace(/\D/g, '');
-    
-    // Limit to 11 digits
     if (numbers.length <= 11) {
       return numbers;
     }
@@ -294,14 +397,59 @@ export default function EventAppointmentPage() {
     setValue('phone', formatted, { shouldValidate: true });
   };
 
+  // Load user appointments from localStorage - PRIVATE na!
+  const loadUserAppointments = () => {
+    try {
+      const stored = localStorage.getItem('appointments');
+      if (stored) {
+        const allAppointments = JSON.parse(stored);
+        const currentUserEmail = getUserEmail();
+        const userId = getUserId();
+        
+        // Filter: I-display lang ang appointments ng current user
+        const userAppointments = allAppointments.filter((appointment: UserAppointment) => 
+          appointment.userId === userId || appointment.email === currentUserEmail
+        );
+        
+        // Sort by date (newest first) with safe date comparison
+        const sortedAppointments = userAppointments.sort((a: UserAppointment, b: UserAppointment) => {
+          const dateA = parseEventDate(a.createdAt) || new Date(0);
+          const dateB = parseEventDate(b.createdAt) || new Date(0);
+          return dateB.getTime() - dateA.getTime();
+        });
+        
+        setUserAppointments(sortedAppointments);
+      }
+    } catch (error) {
+      console.error('Error loading appointments from localStorage:', error);
+    }
+  };
+
+  // Clear all user appointments (for testing)
+  const clearUserAppointments = () => {
+    localStorage.removeItem('appointments');
+    setUserAppointments([]);
+    toast({
+      title: 'Appointments Cleared',
+      description: 'All your appointments have been cleared.',
+    });
+  };
+
   // SUBMIT TO FIREBASE WITH SUCCESS MESSAGE
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
     try {
+      const userId = getUserId();
+      const userEmail = data.email.trim();
+      
+      // Save user email for future identification
+      setUserEmail(userEmail);
+      setCurrentUserEmail(userEmail);
+
       // Prepare data for Firestore
       const appointmentData: AppointmentData = {
         fullName: data.fullName.trim(),
-        email: data.email.trim(),
+        email: userEmail,
         phone: data.phone.trim(),
         eventType: data.eventType,
         eventDate: format(data.eventDate, 'yyyy-MM-dd'),
@@ -310,6 +458,7 @@ export default function EventAppointmentPage() {
         status: 'pending',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+        userId: userId, // Idinagdag ang user ID para sa privacy
       };
 
       // Add message only if it exists and trim to 50 characters
@@ -325,24 +474,38 @@ export default function EventAppointmentPage() {
       console.log('✅ Appointment saved to Firestore with ID:', docRef.id);
 
       // Also save to localStorage as backup
-      const appointment = {
+      const appointment: UserAppointment = {
         id: docRef.id,
-        ...data,
+        fullName: data.fullName.trim(),
+        email: userEmail,
+        phone: data.phone.trim(),
+        eventType: data.eventType,
         eventDate: format(data.eventDate, 'yyyy-MM-dd'),
+        eventTime: data.eventTime,
+        guestCount: data.guestCount,
         status: 'pending',
-        submittedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        firebaseId: docRef.id,
+        userId: userId, // Idinagdag ang user ID para sa privacy
       };
+
+      if (data.message && data.message.trim() !== '') {
+        appointment.message = data.message.trim().substring(0, 50);
+      }
 
       const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
       existing.push(appointment);
       localStorage.setItem('appointments', JSON.stringify(existing));
 
+      // Update local state
+      loadUserAppointments();
+
       // Set success data
       setSuccessData({
         name: data.fullName,
         eventType: data.eventType,
-        date: format(data.eventDate, 'PPP'),
-        time: formatTime(data.eventTime)
+        date: safeFormatDate(data.eventDate, 'PPP'),
+        time: safeFormatTime(data.eventTime)
       });
 
       // Show success message
@@ -370,24 +533,43 @@ export default function EventAppointmentPage() {
       
       // Fallback to localStorage only if Firebase fails
       try {
-        const appointment = {
+        const userId = getUserId();
+        const userEmail = data.email.trim();
+        
+        setUserEmail(userEmail);
+        setCurrentUserEmail(userEmail);
+
+        const appointment: UserAppointment = {
           id: Date.now().toString(),
-          ...data,
+          fullName: data.fullName.trim(),
+          email: userEmail,
+          phone: data.phone.trim(),
+          eventType: data.eventType,
           eventDate: format(data.eventDate, 'yyyy-MM-dd'),
+          eventTime: data.eventTime,
+          guestCount: data.guestCount,
           status: 'pending',
-          submittedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          userId: userId, // Idinagdag ang user ID para sa privacy
         };
+
+        if (data.message && data.message.trim() !== '') {
+          appointment.message = data.message.trim().substring(0, 50);
+        }
 
         const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
         existing.push(appointment);
         localStorage.setItem('appointments', JSON.stringify(existing));
 
+        // Update local state
+        loadUserAppointments();
+
         // Set success data for offline submission
         setSuccessData({
           name: data.fullName,
           eventType: data.eventType,
-          date: format(data.eventDate, 'PPP'),
-          time: formatTime(data.eventTime)
+          date: safeFormatDate(data.eventDate, 'PPP'),
+          time: safeFormatTime(data.eventTime)
         });
 
         // Show success message
@@ -424,16 +606,20 @@ export default function EventAppointmentPage() {
   };
 
   // Helper functions
-  const formatTime = (time24: string): string => {
-    if (!time24) return '—';
-    const [h, m] = time24.split(':').map(Number);
-    const d = new Date();
-    d.setHours(h, m, 0, 0);
-    return format(d, 'h:mm a');
-  };
-
   const formatEventType = (eventType: string): string => {
     return eventTypeMap[eventType] || eventType;
+  };
+
+  // Get status badge color
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'confirmed':
+        return <Badge className="bg-green-100 text-green-800">Confirmed</Badge>;
+      case 'cancelled':
+        return <Badge variant="destructive">Cancelled</Badge>;
+      default:
+        return <Badge variant="secondary">Pending</Badge>;
+    }
   };
 
   // Render requirements for selected event type
@@ -472,6 +658,129 @@ export default function EventAppointmentPage() {
     );
   };
 
+  // Render user appointments - PRIVATE na!
+  const renderUserAppointments = () => {
+    if (userAppointments.length === 0) {
+      return (
+        <Card className="mt-8">
+          <CardHeader>
+            <CardTitle className="text-xl flex items-center gap-2">
+              <CalendarIcon className="h-5 w-5" />
+              Your Appointments
+            </CardTitle>
+            <CardDescription>
+              You don't have any appointments yet. Book your first appointment above!
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      );
+    }
+
+    return (
+      <Card className="mt-8">
+        <CardHeader>
+          <CardTitle className="text-xl flex items-center gap-2">
+            <CalendarIcon className="h-5 w-5" />
+            Your Appointments ({userAppointments.length})
+          </CardTitle>
+          <CardDescription>
+            Here are your scheduled appointments. These are private and only visible to you.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {userAppointments.map((appointment) => {
+              const eventDate = parseEventDate(appointment.eventDate);
+              const createdAt = parseEventDate(appointment.createdAt);
+              
+              return (
+                <Card key={appointment.id} className="border-l-4 border-l-primary">
+                  <CardContent className="p-4">
+                    <div className="flex flex-col gap-3">
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold text-lg">
+                            {formatEventType(appointment.eventType)}
+                          </h3>
+                          {getStatusBadge(appointment.status)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Submitted: {createdAt ? safeFormatDate(createdAt, 'MMM dd, yyyy • h:mm a') : 'Invalid date'}
+                        </div>
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+                        <div className="flex items-center gap-2">
+                          <CalendarIcon className="h-4 w-4 text-primary" />
+                          <div>
+                            <div className="font-medium">Date</div>
+                            <div className="text-muted-foreground">
+                              {eventDate ? safeFormatDate(eventDate, 'PPP') : 'Invalid date'}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Clock className="h-4 w-4 text-primary" />
+                          <div>
+                            <div className="font-medium">Time</div>
+                            <div className="text-muted-foreground">{safeFormatTime(appointment.eventTime)}</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Users className="h-4 w-4 text-primary" />
+                          <div>
+                            <div className="font-medium">Guests</div>
+                            <div className="text-muted-foreground">{appointment.guestCount} people</div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Church className="h-4 w-4 text-primary" />
+                          <div>
+                            <div className="font-medium">Name</div>
+                            <div className="text-muted-foreground">{appointment.fullName}</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {appointment.message && (
+                        <div className="bg-muted/50 p-3 rounded-lg">
+                          <div className="text-sm font-medium mb-1">Additional Notes:</div>
+                          <div className="text-sm text-muted-foreground">"{appointment.message}"</div>
+                        </div>
+                      )}
+
+                      {appointment.firebaseId && (
+                        <div className="text-xs text-muted-foreground flex items-center gap-1">
+                          <CheckCircle className="h-3 w-3 text-green-500" />
+                          Synced with server • ID: {appointment.firebaseId.substring(0, 8)}...
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+          
+          {/* Clear appointments button (for testing) */}
+          <div className="mt-6 pt-4 border-t">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={clearUserAppointments}
+              className="text-destructive hover:text-destructive"
+            >
+              Clear All My Appointments
+            </Button>
+            <p className="text-xs text-muted-foreground mt-2">
+              This will remove all your appointments from this device only.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  };
+
   return (
     <>
       {/* HERO SECTION */}
@@ -486,7 +795,7 @@ export default function EventAppointmentPage() {
             Church Events & Appointments
           </h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Book your sacrament at church-approved times only.
+            Book your sacrament at church-approved times only. Your appointments are private and secure.
             {eventType === 'baptism' && ' Baptism is available every Sunday.'}
           </p>
         </div>
@@ -653,7 +962,7 @@ export default function EventAppointmentPage() {
                           disabled={isSubmitting || !eventType}
                         >
                           <CalendarIcon className="mr-2 h-4 w-4" />
-                          {date ? format(date, 'PPP') : 'Pick a date'}
+                          {date ? safeFormatDate(date, 'PPP') : 'Pick a date'}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0">
@@ -699,7 +1008,7 @@ export default function EventAppointmentPage() {
                         <SelectContent>
                           {allowedTimes[eventType]?.map((t) => (
                             <SelectItem key={t} value={t}>
-                              {formatTime(t)} (1 hour)
+                              {safeFormatTime(t)} (1 hour)
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -770,6 +1079,9 @@ export default function EventAppointmentPage() {
                 </form>
               </CardContent>
             </Card>
+
+            {/* USER APPOINTMENTS SECTION - NOW AT THE BOTTOM */}
+            {renderUserAppointments()}
           </div>
 
           {/* RIGHT SIDEBAR */}

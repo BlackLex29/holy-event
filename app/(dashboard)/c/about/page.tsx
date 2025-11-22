@@ -35,7 +35,7 @@ export default function AboutChurchPage() {
                 <Church className="h-16 w-16" />
               </div>
             </div>
-            <h1 className="text-4xl md:text-6xl font-bold mb-6">Saint Augustine Parish</h1>
+            <h1 className="text-4xl md:text-6xl font-bold mb-6">St. Augustine Parish</h1>
             <p className="text-xl md:text-2xl opacity-90 mb-8 leading-relaxed">
               "To seek God and to find Him in all things"
             </p>
@@ -56,7 +56,7 @@ export default function AboutChurchPage() {
                   <h2 className="text-3xl font-bold mb-4">Welcome to Our Parish</h2>
                   <div className="space-y-4 text-muted-foreground">
                     <p className="text-lg leading-relaxed">
-                      Saint Augustine Parish is a vibrant Catholic community dedicated to living 
+                      St. Augustine Parish is a vibrant Catholic community dedicated to living 
                       the Gospel of Jesus Christ through worship, service, and fellowship. 
                     </p>
                     <p className="text-lg leading-relaxed">
@@ -80,7 +80,7 @@ export default function AboutChurchPage() {
                 <div className="bg-muted rounded-2xl h-96 w-full flex items-center justify-center shadow-lg overflow-hidden">
                   <img 
                     src="/1.jpg" 
-                    alt="Saint Augustine Church Building"
+                    alt="St. Augustine Church Building"
                     className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
                     onError={(e) => {
                       // Fallback image if primary fails
