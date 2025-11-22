@@ -35,6 +35,26 @@ const LoginPage = () => {
         rememberMe: false,
     });
 
+    // Check if user is already logged in
+    useEffect(() => {
+        const checkAuthState = () => {
+            const userRole = localStorage.getItem('userRole');
+            const authToken = localStorage.getItem('authToken');
+            const userId = localStorage.getItem('church_appointment_userId');
+            
+            if (userRole && authToken && userId) {
+                // User is already logged in, redirect to appropriate dashboard
+                if (userRole === 'admin') {
+                    router.push('/a/dashboard');
+                } else {
+                    router.push('/c/dashboard');
+                }
+            }
+        };
+
+        checkAuthState();
+    }, [router]);
+
     // Check URL parameters for verification success
     useEffect(() => {
         const urlParams = new URLSearchParams(window.location.search);
@@ -43,7 +63,6 @@ const LoginPage = () => {
         
         if (verified === 'true' && email) {
             setError('Email verified successfully! You can now login.');
-            // Pre-fill the email field
             setFormData(prev => ({ ...prev, email }));
         }
     }, []);
@@ -55,34 +74,74 @@ const LoginPage = () => {
         }));
     };
 
-    const redirectUser = async (uid: string) => {
+    const saveUserToLocalStorage = async (uid: string, email: string, role: string) => {
+        try {
+            // Generate or get user ID for appointments
+            let userId = localStorage.getItem('church_appointment_userId');
+            if (!userId) {
+                userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                localStorage.setItem('church_appointment_userId', userId);
+            }
+            
+            // Save user data to localStorage
+            localStorage.setItem('userRole', role);
+            localStorage.setItem('authToken', 'firebase-auth-' + Date.now());
+            localStorage.setItem('userEmail', email);
+            localStorage.setItem('church_appointment_userEmail', email);
+            
+            // Save basic user info
+            const userData = {
+                name: email.split('@')[0] || 'Parishioner',
+                email: email,
+                phone: '+639171234567',
+                joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+                parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
+            };
+            localStorage.setItem('currentUser', JSON.stringify(userData));
+            
+            console.log('✅ User data saved to localStorage:', { userId, role, email });
+        } catch (error) {
+            console.error('Error saving user to localStorage:', error);
+        }
+    };
+
+    const redirectUser = async (uid: string, email: string) => {
         try {
             const userDoc = await getDoc(doc(db, 'users', uid));
+            let role = 'client'; // Default role
+            
             if (userDoc.exists()) {
                 const userData = userDoc.data();
-                const role = userData.role;
+                role = userData.role || 'client';
                 
                 // Update last login time and status
                 await updateDoc(doc(db, 'users', uid), {
                     lastLogin: new Date(),
                     status: 'active',
-                    emailVerified: true, // Ensure this is set to true
-                    pendingVerification: false // Remove pending status
+                    emailVerified: true,
+                    pendingVerification: false
                 });
-
-                if (role === 'admin') {
-                    router.push('/a/dashboard');
-                } else {
-                    router.push('/c/dashboard');
-                }
             } else {
-                setError('User profile not found. Please contact support.');
-                setLoading(false);
+                // If user doesn't exist in Firestore, create basic record
+                console.log('User not found in Firestore, using default client role');
+            }
+
+            // Save user data to localStorage FIRST
+            await saveUserToLocalStorage(uid, email, role);
+
+            // Then redirect
+            if (role === 'admin') {
+                router.push('/a/dashboard');
+            } else {
+                router.push('/c/dashboard');
             }
         } catch (error) {
             console.error('Error redirecting user:', error);
-            setError('Error loading user profile.');
-            setLoading(false);
+            setError('Error loading user profile. Using default access.');
+            
+            // Fallback: Save basic user data and redirect to client dashboard
+            await saveUserToLocalStorage(uid, email, 'client');
+            router.push('/c/dashboard');
         }
     };
 
@@ -124,6 +183,7 @@ const LoginPage = () => {
             );
             
             const user = userCredential.user;
+            console.log('✅ Firebase login successful:', { uid: user.uid, email: user.email });
             
             // Check if email is verified
             if (!user.emailVerified) {
@@ -131,15 +191,14 @@ const LoginPage = () => {
                 setShowVerificationWarning(true);
                 setError('Please verify your email address before logging in. Check your email for the verification link.');
                 setLoading(false);
-                
-                // DON'T sign out here - let the user stay signed in so they can receive verification emails
-                // await signOut(auth); // REMOVED THIS LINE
                 return;
             }
             
             // If email is verified, proceed to redirect
-            await redirectUser(user.uid);
+            await redirectUser(user.uid, user.email || formData.email);
         } catch (err: any) {
+            console.error('❌ Login error:', err.code, err.message);
+            
             if (err.code === 'auth/multi-factor-auth-required') {
                 // MFA is required, show the TOTP input
                 const resolver = getMultiFactorResolver(auth, err);
@@ -201,8 +260,9 @@ const LoginPage = () => {
             }
 
             // Redirect user
-            await redirectUser(userCredential.user.uid);
+            await redirectUser(userCredential.user.uid, user.email || formData.email);
         } catch (err: any) {
+            console.error('MFA error:', err);
             const messages: { [key: string]: string } = {
                 'auth/invalid-verification-code': 'Invalid verification code.',
                 'auth/code-expired': 'Verification code has expired.',
@@ -241,12 +301,13 @@ const LoginPage = () => {
             
             if (unverifiedUser.emailVerified) {
                 // Email is now verified, proceed with login
-                await redirectUser(unverifiedUser.uid);
+                await redirectUser(unverifiedUser.uid, unverifiedUser.email);
             } else {
                 setError('Email not verified yet. Please check your email and click the verification link.');
                 setLoading(false);
             }
         } catch (err: any) {
+            console.error('Error checking verification:', err);
             setError('Error checking verification status. Please try logging in again.');
             setLoading(false);
         }

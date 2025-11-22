@@ -53,6 +53,7 @@ interface ChurchEvent {
   postedAt: any;
   createdAt: any;
   updatedAt: any;
+  isPublic: boolean; // NEW: Para makita ng lahat ng users
 }
 
 const churchEvents = [
@@ -120,6 +121,7 @@ export default function PostChurchEvent() {
         time: formData.time,
         location: formData.location.trim(),
         status: 'active',
+        isPublic: true, // NEW: Public event para makita ng lahat
         postedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -464,5 +466,5 @@ export default function PostChurchEvent() {
         </div>
       )}
     </div>
-  );
+  );  
 }

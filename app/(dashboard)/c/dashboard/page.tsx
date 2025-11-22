@@ -19,6 +19,7 @@ import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
 import { db } from '@/lib/firebase-config';
 import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { useRouter } from 'next/navigation';
 
 interface Appointment {
   id: string;
@@ -32,15 +33,21 @@ interface Appointment {
   phone?: string;
   guestCount?: string;
   message?: string;
+  userId?: string;
 }
 
 interface ChurchEvent {
   id: string;
+  type: string;
   title: string;
+  description: string;
   date: string;
   time: string;
   location: string;
-  description: string;
+  priest?: string;
+  status: 'active' | 'cancelled';
+  isPublic: boolean;
+  postedAt: string;
 }
 
 interface UserData {
@@ -51,65 +58,83 @@ interface UserData {
   parishionerId: string;
 }
 
+// Helper functions for user identification
+const getUserId = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('church_appointment_userId');
+};
+
+const getUserEmail = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('church_appointment_userEmail');
+};
+
 export default function ClientDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<ChurchEvent[]>([]);
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const { toast } = useToast();
+  const router = useRouter();
 
   useEffect(() => {
+    const checkAuthentication = () => {
+      const userRole = localStorage.getItem('userRole');
+      const authToken = localStorage.getItem('authToken');
+      const userId = getUserId();
+      
+      if (!userRole || !authToken || !userId) {
+        setIsAuthenticated(false);
+        router.push('/login?redirect=' + encodeURIComponent('/c/dashboard'));
+        return false;
+      }
+      
+      setIsAuthenticated(true);
+      return true;
+    };
+
+    if (!checkAuthentication()) {
+      return;
+    }
+
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
         
-        // Get user data from localStorage or authentication context
-        const storedUser = localStorage.getItem('currentUser');
-        let currentUser: UserData;
-
-        if (storedUser) {
-          currentUser = JSON.parse(storedUser);
-        } else {
-          // Fallback: Get user from appointments or use default
-          const storedAppointments = localStorage.getItem('appointments');
-          const appointments: Appointment[] = storedAppointments ? JSON.parse(storedAppointments) : [];
-          
-          if (appointments.length > 0) {
-            // Use the first appointment's user data
-            const latestAppointment = appointments[0];
-            currentUser = {
-              name: latestAppointment.fullName || latestAppointment.email.split('@')[0],
-              email: latestAppointment.email,
-              phone: latestAppointment.phone || '+639171234567',
-              joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
-              parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
-            };
-          } else {
-            // Default user data if no appointments found
-            currentUser = {
-              name: 'Parishioner',
-              email: 'user@example.com',
-              phone: '+639171234567',
-              joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
-              parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
-            };
-          }
-          
-          // Save user to localStorage for future use
-          localStorage.setItem('currentUser', JSON.stringify(currentUser));
+        const userId = getUserId();
+        const userEmail = getUserEmail();
+        
+        if (!userId || !userEmail) {
+          toast({
+            title: 'Authentication Required',
+            description: 'Please log in again.',
+            variant: 'destructive',
+          });
+          router.push('/login');
+          return;
         }
+
+        // Get user data
+        const currentUser: UserData = {
+          name: userEmail.split('@')[0] || 'Parishioner',
+          email: userEmail,
+          phone: '+639171234567',
+          joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+          parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
+        };
 
         setUserData(currentUser);
 
         // REAL-TIME LISTENER FOR APPOINTMENTS FROM FIREBASE
-        if (currentUser?.email) {
-          const appointmentsQuery = query(
-            collection(db, 'appointments'),
-            where('email', '==', currentUser.email),
-            orderBy('createdAt', 'desc')
-          );
+        const appointmentsQuery = query(
+          collection(db, 'appointments'),
+          where('userId', '==', userId),
+          orderBy('createdAt', 'desc')
+        );
 
-          const unsubscribe = onSnapshot(appointmentsQuery, (querySnapshot) => {
+        const appointmentsUnsubscribe = onSnapshot(appointmentsQuery, 
+          (querySnapshot) => {
             const userAppointments: Appointment[] = [];
             querySnapshot.forEach((doc) => {
               const data = doc.data();
@@ -124,11 +149,12 @@ export default function ClientDashboardPage() {
                 fullName: data.fullName || '',
                 phone: data.phone || '',
                 guestCount: data.guestCount || '',
-                message: data.message || ''
+                message: data.message || '',
+                userId: data.userId || ''
               });
             });
             
-            setAppointments(userAppointments.slice(0, 3)); // Show only latest 3
+            setAppointments(userAppointments.slice(0, 3));
             
             // Show toast when new appointments are approved
             userAppointments.forEach(apt => {
@@ -145,56 +171,115 @@ export default function ClientDashboardPage() {
                 }
               }
             });
-          });
+          },
+          (error) => {
+            console.error('Firebase appointments error:', error);
+            setAppointments([]);
+          }
+        );
 
-          // Get church events from localStorage
-          const storedEvents = localStorage.getItem('churchEvents');
-          const churchEvents: ChurchEvent[] = storedEvents 
-            ? JSON.parse(storedEvents).slice(0, 3)
-            : [];
+        // REAL-TIME LISTENER FOR CHURCH EVENTS FROM FIREBASE
+        const eventsQuery = query(
+          collection(db, 'events'),
+          where('status', '==', 'active'),
+          where('isPublic', '==', true),
+          orderBy('date', 'asc')
+        );
 
-          setUpcomingEvents(churchEvents);
+        const eventsUnsubscribe = onSnapshot(eventsQuery, 
+          (querySnapshot) => {
+            const churchEvents: ChurchEvent[] = [];
+            querySnapshot.forEach((doc) => {
+              const data = doc.data();
+              const eventDate = data.date;
+              
+              // Show only future events
+              if (new Date(eventDate) >= new Date()) {
+                churchEvents.push({
+                  id: doc.id,
+                  type: data.type || '',
+                  title: data.title || '',
+                  description: data.description || '',
+                  date: eventDate,
+                  time: data.time || '',
+                  location: data.location || '',
+                  priest: data.priest || '',
+                  status: data.status || 'active',
+                  isPublic: data.isPublic || false,
+                  postedAt: data.postedAt?.toDate?.()?.toISOString() || new Date().toISOString()
+                });
+              }
+            });
+            
+            // Show only upcoming 3 events
+            setUpcomingEvents(churchEvents.slice(0, 3));
+          },
+          (error) => {
+            console.error('Firebase events error:', error);
+            // Fallback to localStorage
+            loadEventsFromLocalStorage();
+          }
+        );
 
-          return () => unsubscribe();
-        }
+        return () => {
+          appointmentsUnsubscribe();
+          eventsUnsubscribe();
+        };
 
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
-        
-        // Fallback to localStorage if Firebase fails
-        const storedAppointments = localStorage.getItem('appointments');
-        const userAppointments: Appointment[] = storedAppointments 
-          ? JSON.parse(storedAppointments)
-              .filter((apt: Appointment) => apt.email === userData?.email)
-              .sort((a: Appointment, b: Appointment) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime())
-          : [];
-
-        setAppointments(userAppointments.slice(0, 3));
-        setUpcomingEvents(getMockEvents());
+        setAppointments([]);
+        loadEventsFromLocalStorage();
       } finally {
         setLoading(false);
       }
     };
 
     fetchDashboardData();
-  }, [toast]);
+  }, [toast, router]);
+
+  const loadEventsFromLocalStorage = () => {
+    try {
+      const storedEvents = localStorage.getItem('churchEvents');
+      if (storedEvents) {
+        const allEvents: ChurchEvent[] = JSON.parse(storedEvents);
+        const futureEvents = allEvents
+          .filter(event => new Date(event.date) >= new Date())
+          .slice(0, 3);
+        setUpcomingEvents(futureEvents);
+      } else {
+        setUpcomingEvents(getMockEvents());
+      }
+    } catch (error) {
+      console.error('Error loading events from localStorage:', error);
+      setUpcomingEvents(getMockEvents());
+    }
+  };
 
   const getMockEvents = (): ChurchEvent[] => [
     {
       id: '1',
-      title: 'Feast of Christ the King',
-      date: '2025-11-24',
-      time: '9:00 AM',
+      type: 'mass',
+      title: 'Sunday Mass',
+      description: 'Regular Sunday celebration',
+      date: new Date(Date.now() + 86400000).toISOString().split('T')[0], // Tomorrow
+      time: '09:00',
       location: 'Main Sanctuary',
-      description: 'Special mass celebration'
+      status: 'active',
+      isPublic: true,
+      postedAt: new Date().toISOString()
     },
     {
       id: '2',
-      title: 'Advent Recollection',
-      date: '2025-12-07',
-      time: '2:00 PM',
-      location: 'Parish Hall',
-      description: 'Preparation for Christmas season'
+      type: 'confession',
+      title: 'Confession Schedule',
+      description: 'Sacrament of Reconciliation',
+      date: new Date(Date.now() + 172800000).toISOString().split('T')[0], // Day after tomorrow
+      time: '14:00',
+      location: 'Confession Room',
+      status: 'active',
+      isPublic: true,
+      postedAt: new Date().toISOString()
     }
   ];
 
@@ -213,24 +298,62 @@ export default function ClientDashboardPage() {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    } catch (error) {
+      return 'Invalid date';
+    }
+  };
+
+  const formatEventType = (eventType: string): string => {
+    const eventTypeMap: Record<string, string> = {
+      confession: 'Confession',
+      mass: 'Holy Mass',
+      rosary: 'Holy Rosary',
+      baptism: 'Baptism',
+      wedding: 'Wedding',
+      funeral: 'Funeral Mass',
+      adoration: 'Adoration',
+      recollection: 'Recollection',
+      fiesta: 'Barangay Fiesta',
+      'simbang-gabi': 'Simbang Gabi',
+      'school-mass': 'School Mass'
+    };
+    return eventTypeMap[eventType] || eventType;
   };
 
   const getUpcomingAppointment = () => {
     const approvedAppointments = appointments.filter(apt => apt.status === 'approved');
     const upcoming = approvedAppointments
-      .filter(apt => new Date(apt.eventDate) >= new Date())
+      .filter(apt => {
+        try {
+          return new Date(apt.eventDate) >= new Date();
+        } catch {
+          return false;
+        }
+      })
       .sort((a, b) => new Date(a.eventDate).getTime() - new Date(b.eventDate).getTime())[0];
     
     return upcoming;
   };
 
   const upcomingAppointment = getUpcomingAppointment();
+
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <p className="mt-4 text-muted-foreground">Checking authentication...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -311,7 +434,7 @@ export default function ClientDashboardPage() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{upcomingEvents.length}</div>
-              <p className="text-xs text-muted-foreground">This month</p>
+              <p className="text-xs text-muted-foreground">Live from parish</p>
             </CardContent>
           </Card>
 
@@ -429,7 +552,7 @@ export default function ClientDashboardPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Upcoming Church Events</CardTitle>
-                <CardDescription>Join our community activities</CardDescription>
+                <CardDescription>Live events from the parish</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
@@ -451,8 +574,14 @@ export default function ClientDashboardPage() {
                             <MapPin className="w-3 h-3" />
                             {event.location}
                           </p>
+                          {event.priest && (
+                            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                              <Users className="w-3 h-3" />
+                              {event.priest}
+                            </p>
+                          )}
                         </div>
-                        <Badge variant="outline">Event</Badge>
+                        <Badge variant="outline">{formatEventType(event.type)}</Badge>
                       </div>
                     ))
                   )}
@@ -484,8 +613,6 @@ export default function ClientDashboardPage() {
             </Card>
           </div>
         </div>
-
-        {/* Welcome Message for New Users - REMOVED */}
       </div>
     </div>
   );

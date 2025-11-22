@@ -279,7 +279,7 @@ const RegisterPage = () => {
                 <CardHeader className="bg-gradient-to-r from-primary to-primary/90 p-8 rounded-t-lg text-primary-foreground">
                     <div className="flex items-center gap-3 mb-3">
                         <Church className="w-8 h-8" />
-                        <h1 className="text-3xl font-bold">Holy Events</h1>
+                        <h1 className="text-3xl font-bold">Holy Event</h1>
                     </div>
                     <p className="text-lg opacity-90">Join Our Community</p>
                 </CardHeader>
