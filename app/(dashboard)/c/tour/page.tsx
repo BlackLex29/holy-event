@@ -40,7 +40,7 @@ export default function VisualTourPage() {
     {
       id: 3,
       name: 'Parish Hall',
-      description: 'Virtual tour of our community gathering space',
+      description: 'Virtual view of our community gathering space',
       embedUrl: 'https://momento360.com/e/u/97a7fa765a53490a8d6030ff26e7134a?utm_campaign=embed&utm_source=other&heading=180&pitch=0&field-of-view=75&size=medium&display-plan=true',
       thumbnail: '/3.jpg'
     }
@@ -133,7 +133,7 @@ export default function VisualTourPage() {
                 className="gap-2"
               >
                 <Navigation className="w-4 h-4" />
-                360° Virtual Tour
+                360° Virtual View
               </Button>
               <Button
                 variant={activeTab === 'map' ? 'default' : 'outline'}
