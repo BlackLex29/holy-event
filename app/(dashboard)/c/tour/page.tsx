@@ -102,7 +102,7 @@ export default function VisualTourPage() {
                 <MapPin className="h-16 w-16" />
               </div>
             </div>
-            <h1 className="text-4xl md:text-6xl font-bold mb-6">Visual Tour</h1>
+            <h1 className="text-4xl md:text-6xl font-bold mb-6">Visual View</h1>
             <p className="text-xl md:text-2xl opacity-90 mb-8 leading-relaxed">
               Explore Saint Augustine Parish from anywhere in the world
             </p>
