@@ -69,6 +69,25 @@ const getUserEmail = (): string | null => {
   return localStorage.getItem('church_appointment_userEmail');
 };
 
+// Helper function to format event type
+const formatEventType = (eventType: string): string => {
+  const eventTypeMap: Record<string, string> = {
+    mass: 'Holy Mass',
+    wedding: 'Wedding',
+    baptism: 'Baptism',
+    funeral: 'Funeral Mass',
+    confirmation: 'Confirmation',
+    confession: 'Confession',
+    rosary: 'Holy Rosary',
+    adoration: 'Adoration',
+    recollection: 'Recollection',
+    fiesta: 'Barangay Fiesta',
+    'simbang-gabi': 'Simbang Gabi',
+    'school-mass': 'School Mass'
+  };
+  return eventTypeMap[eventType] || eventType;
+};
+
 export default function ClientDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<ChurchEvent[]>([]);
@@ -138,7 +157,7 @@ export default function ClientDashboardPage() {
             const userAppointments: Appointment[] = [];
             querySnapshot.forEach((doc) => {
               const data = doc.data();
-              userAppointments.push({
+              const appointment: Appointment = {
                 id: doc.id,
                 eventType: data.eventType || '',
                 eventDate: data.eventDate || '',
@@ -151,9 +170,16 @@ export default function ClientDashboardPage() {
                 guestCount: data.guestCount || '',
                 message: data.message || '',
                 userId: data.userId || ''
-              });
+              };
+              userAppointments.push(appointment);
             });
             
+            console.log('📊 Dashboard appointments loaded:', userAppointments.length);
+            
+            // Update localStorage with latest appointments
+            localStorage.setItem('appointments', JSON.stringify(userAppointments));
+            
+            // Show only latest 3 appointments for dashboard
             setAppointments(userAppointments.slice(0, 3));
             
             // Show toast when new appointments are approved
@@ -166,7 +192,7 @@ export default function ClientDashboardPage() {
                 if (wasPending) {
                   toast({
                     title: 'Appointment Approved! 🎉',
-                    description: `Your ${apt.eventType} on ${formatDate(apt.eventDate)} has been approved.`,
+                    description: `Your ${formatEventType(apt.eventType)} on ${formatDate(apt.eventDate)} has been approved.`,
                   });
                 }
               }
@@ -174,7 +200,8 @@ export default function ClientDashboardPage() {
           },
           (error) => {
             console.error('Firebase appointments error:', error);
-            setAppointments([]);
+            // Fallback to localStorage
+            loadAppointmentsFromLocalStorage();
           }
         );
 
@@ -237,6 +264,30 @@ export default function ClientDashboardPage() {
 
     fetchDashboardData();
   }, [toast, router]);
+
+  const loadAppointmentsFromLocalStorage = () => {
+    try {
+      const storedAppointments = localStorage.getItem('appointments');
+      if (storedAppointments) {
+        const allAppointments: Appointment[] = JSON.parse(storedAppointments);
+        const userId = getUserId();
+        const userEmail = getUserEmail();
+        
+        // Filter appointments for current user
+        const userAppointments = allAppointments.filter((apt: Appointment) => 
+          apt.userId === userId || apt.email === userEmail
+        );
+        
+        console.log('📱 LocalStorage appointments loaded:', userAppointments.length);
+        setAppointments(userAppointments.slice(0, 3));
+      } else {
+        setAppointments([]);
+      }
+    } catch (error) {
+      console.error('Error loading appointments from localStorage:', error);
+      setAppointments([]);
+    }
+  };
 
   const loadEventsFromLocalStorage = () => {
     try {
@@ -310,23 +361,6 @@ export default function ClientDashboardPage() {
     }
   };
 
-  const formatEventType = (eventType: string): string => {
-    const eventTypeMap: Record<string, string> = {
-      confession: 'Confession',
-      mass: 'Holy Mass',
-      rosary: 'Holy Rosary',
-      baptism: 'Baptism',
-      wedding: 'Wedding',
-      funeral: 'Funeral Mass',
-      adoration: 'Adoration',
-      recollection: 'Recollection',
-      fiesta: 'Barangay Fiesta',
-      'simbang-gabi': 'Simbang Gabi',
-      'school-mass': 'School Mass'
-    };
-    return eventTypeMap[eventType] || eventType;
-  };
-
   const getUpcomingAppointment = () => {
     const approvedAppointments = appointments.filter(apt => apt.status === 'approved');
     const upcoming = approvedAppointments
@@ -343,6 +377,13 @@ export default function ClientDashboardPage() {
   };
 
   const upcomingAppointment = getUpcomingAppointment();
+
+  // Handle manual refresh of appointments
+  const handleRefreshAppointments = () => {
+    setLoading(true);
+    loadAppointmentsFromLocalStorage();
+    setTimeout(() => setLoading(false), 1000);
+  };
 
   if (!isAuthenticated) {
     return (
@@ -415,7 +456,17 @@ export default function ClientDashboardPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 My Appointments
               </CardTitle>
-              <Calendar className="w-5 h-5 text-primary" />
+              <div className="flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-primary" />
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={handleRefreshAppointments}
+                  className="h-6 w-6 p-0"
+                >
+                  🔄
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{appointments.length}</div>
@@ -471,7 +522,7 @@ export default function ClientDashboardPage() {
                   <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="font-bold text-lg text-green-900">
-                        {upcomingAppointment.eventType}
+                        {formatEventType(upcomingAppointment.eventType)}
                       </h3>
                       {getStatusBadge(upcomingAppointment.status)}
                     </div>
@@ -484,6 +535,12 @@ export default function ClientDashboardPage() {
                         <Clock className="w-4 h-4 text-green-600" />
                         <span>{upcomingAppointment.eventTime}</span>
                       </p>
+                      {upcomingAppointment.fullName && (
+                        <p className="flex items-center gap-2">
+                          <Users className="w-4 h-4 text-green-600" />
+                          <span>{upcomingAppointment.fullName}</span>
+                        </p>
+                      )}
                     </div>
                   </div>
                 </CardContent>
@@ -497,13 +554,16 @@ export default function ClientDashboardPage() {
                   <CardTitle>Recent Appointments</CardTitle>
                   <CardDescription>
                     Your recent sacrament requests • Real-time updates
+                    {appointments.length > 0 && ` • Showing ${appointments.length} of ${localStorage.getItem('appointments') ? JSON.parse(localStorage.getItem('appointments')!).length : 0} total`}
                   </CardDescription>
                 </div>
-                <Button asChild variant="outline" size="sm">
-                  <Link href="/c/appointments">
-                    View All
-                  </Link>
-                </Button>
+                <div className="flex gap-2">
+                  <Button asChild variant="outline" size="sm">
+                    <Link href="/c/appointments">
+                      View All
+                    </Link>
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
@@ -511,7 +571,8 @@ export default function ClientDashboardPage() {
                     <div className="text-center py-8 text-muted-foreground">
                       <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No appointments yet</p>
-                      <Button asChild className="mt-4">
+                      <p className="text-sm mb-4">Your appointments will appear here after booking</p>
+                      <Button asChild className="mt-2">
                         <Link href="/c/appointments">
                           Book Your First Appointment
                         </Link>
@@ -531,10 +592,15 @@ export default function ClientDashboardPage() {
                              <Clock className="w-4 h-4" />}
                           </div>
                           <div>
-                            <p className="font-medium">{appointment.eventType}</p>
+                            <p className="font-medium">{formatEventType(appointment.eventType)}</p>
                             <p className="text-sm text-muted-foreground">
                               {formatDate(appointment.eventDate)} • {appointment.eventTime}
                             </p>
+                            {appointment.fullName && (
+                              <p className="text-xs text-muted-foreground">
+                                {appointment.fullName}
+                              </p>
+                            )}
                           </div>
                         </div>
                         {getStatusBadge(appointment.status)}
@@ -608,6 +674,29 @@ export default function ClientDashboardPage() {
                     <div className="w-3 h-3 rounded-full bg-red-500"></div>
                     <span>Rejected - Please contact the parish for details</span>
                   </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Quick Actions */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Quick Actions</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-3">
+                  <Button asChild className="w-full">
+                    <Link href="/c/appointments">
+                      <Calendar className="w-4 h-4 mr-2" />
+                      Book New Appointment
+                    </Link>
+                  </Button>
+                  <Button asChild variant="outline" className="w-full">
+                    <Link href="/c/tour">
+                      <MapPin className="w-4 h-4 mr-2" />
+                      Church Virtual View
+                    </Link>
+                  </Button>
                 </div>
               </CardContent>
             </Card>
