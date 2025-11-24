@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Church, MailCheck, AlertCircle, RefreshCw } from 'lucide-react';
+import { Church, MailCheck, AlertCircle, RefreshCw, Eye, EyeOff } from 'lucide-react';
 import {
     signInWithEmailAndPassword,
     getMultiFactorResolver,
@@ -28,6 +28,7 @@ const LoginPage = () => {
     const [showVerificationWarning, setShowVerificationWarning] = useState(false);
     const [unverifiedUser, setUnverifiedUser] = useState<any>(null);
     const [resendingVerification, setResendingVerification] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
     
     const [formData, setFormData] = useState({
         email: '',
@@ -528,16 +529,30 @@ const LoginPage = () => {
                         {/* Password */}
                         <div className="space-y-2">
                             <Label htmlFor="password">Password</Label>
-                            <Input
-                                id="password"
-                                type="password"
-                                placeholder="••••••••"
-                                value={formData.password}
-                                onChange={(e) => handleChange('password', e.target.value)}
-                                required
-                                disabled={loading}
-                                autoComplete="current-password"
-                            />
+                            <div className="relative">
+                                <Input
+                                    id="password"
+                                    type={showPassword ? "text" : "password"}
+                                    placeholder="••••••••"
+                                    value={formData.password}
+                                    onChange={(e) => handleChange('password', e.target.value)}
+                                    required
+                                    disabled={loading}
+                                    autoComplete="current-password"
+                                    className="pr-10"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                    className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                >
+                                    {showPassword ? (
+                                        <EyeOff className="w-4 h-4" />
+                                    ) : (
+                                        <Eye className="w-4 h-4" />
+                                    )}
+                                </button>
+                            </div>
                         </div>
 
                         {/* Remember Me & Forgot Password */}

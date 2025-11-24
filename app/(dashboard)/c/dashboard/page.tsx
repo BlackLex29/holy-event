@@ -1,5 +1,4 @@
-'use client';
-
+"use client"
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,7 +9,6 @@ import {
   Calendar,
   Clock,
   MapPin,
-  Users,
   CheckCircle,
   XCircle,
   CalendarDays
@@ -54,8 +52,6 @@ interface UserData {
   name: string;
   email: string;
   phone: string;
-  joinDate: string;
-  parishionerId: string;
 }
 
 // Helper functions for user identification
@@ -138,9 +134,7 @@ export default function ClientDashboardPage() {
         const currentUser: UserData = {
           name: userEmail.split('@')[0] || 'Parishioner',
           email: userEmail,
-          phone: '+639171234567',
-          joinDate: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
-          parishionerId: `P-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`
+          phone: '+639171234567'
         };
 
         setUserData(currentUser);
@@ -450,7 +444,7 @@ export default function ClientDashboardPage() {
 
       <div className="container mx-auto px-6 py-8 -mt-6">
         {/* Quick Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
           <Card className="border-l-4 border-l-primary shadow-lg">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -486,19 +480,6 @@ export default function ClientDashboardPage() {
             <CardContent>
               <div className="text-2xl font-bold">{upcomingEvents.length}</div>
               <p className="text-xs text-muted-foreground">Live from parish</p>
-            </CardContent>
-          </Card>
-
-          <Card className="border-l-4 border-l-green-500 shadow-lg">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Member Since
-              </CardTitle>
-              <Users className="w-5 h-5 text-green-600" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{userData.joinDate}</div>
-              <p className="text-xs text-muted-foreground">Parishioner ID: {userData.parishionerId}</p>
             </CardContent>
           </Card>
         </div>
@@ -537,7 +518,7 @@ export default function ClientDashboardPage() {
                       </p>
                       {upcomingAppointment.fullName && (
                         <p className="flex items-center gap-2">
-                          <Users className="w-4 h-4 text-green-600" />
+                          <CheckCircle className="w-4 h-4 text-green-600" />
                           <span>{upcomingAppointment.fullName}</span>
                         </p>
                       )}
@@ -642,7 +623,7 @@ export default function ClientDashboardPage() {
                           </p>
                           {event.priest && (
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                              <Users className="w-3 h-3" />
+                              <CheckCircle className="w-3 h-3" />
                               {event.priest}
                             </p>
                           )}

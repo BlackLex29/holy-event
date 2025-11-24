@@ -70,7 +70,12 @@ const formSchema = z.object({
     { message: 'Please select a valid future date' }
   ),
   eventTime: z.string().min(1, 'Please select a time'),
-  guestCount: z.string().min(1, 'Please enter number of guests'),
+  guestCount: z.string()
+    .min(1, 'Please enter number of capacity')
+    .refine((val) => {
+      const count = parseInt(val);
+      return count >= 1 && count <= 1000;
+    }, 'Guest count must be between 1 and 1000'),
   message: z.string()
     .max(50, 'Additional notes cannot exceed 50 characters')
     .optional(),
@@ -335,6 +340,7 @@ export default function EventAppointmentPage() {
   const eventTime = useWatch({ control, name: 'eventTime' });
   const message = watch('message');
   const email = watch('email');
+  const guestCount = watch('guestCount');
 
   // Watch for message changes to update character count
   useEffect(() => {
@@ -395,6 +401,33 @@ export default function EventAppointmentPage() {
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const formatted = formatPhoneNumber(e.target.value);
     setValue('phone', formatted, { shouldValidate: true });
+  };
+
+  // Handle guest count input with maximum limit
+  const handleGuestCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value;
+    
+    // Remove non-numeric characters
+    value = value.replace(/\D/g, '');
+    
+    // If empty, set to empty string
+    if (value === '') {
+      setValue('guestCount', '', { shouldValidate: true });
+      return;
+    }
+    
+    // Convert to number and check maximum
+    const count = parseInt(value);
+    if (count > 1000) {
+      setValue('guestCount', '1000', { shouldValidate: true });
+      toast({
+        title: 'Maximum Guests Reached',
+        description: 'Guest count has been set to the maximum of 1000',
+        variant: 'default',
+      });
+    } else {
+      setValue('guestCount', value, { shouldValidate: true });
+    }
   };
 
   // Load user appointments from localStorage - PRIVATE na!
@@ -1021,16 +1054,27 @@ export default function EventAppointmentPage() {
 
                   {/* GUESTS */}
                   <div className="space-y-2">
-                    <Label>Number of Guests *</Label>
+                    <div className="flex justify-between items-center">
+                      <Label>Number of Capacity *</Label>
+                      <span className={`text-xs ${parseInt(guestCount || '0') > 1000 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                        {guestCount || '0'}/1000
+                      </span>
+                    </div>
                     <Input 
                       {...register('guestCount')} 
                       type="number" 
                       min="1" 
+                      max="1000"
                       placeholder="50" 
-                      disabled={isSubmitting} 
+                      disabled={isSubmitting}
+                      onChange={handleGuestCountChange}
                     />
-                    {errors.guestCount && (
+                    {errors.guestCount ? (
                       <p className="text-sm text-destructive">{errors.guestCount.message}</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Maximum 1000 guests allowed
+                      </p>
                     )}
                   </div>
 
@@ -1162,6 +1206,10 @@ export default function EventAppointmentPage() {
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground">Booking Lead Time:</span>
                     <span className="font-semibold">24 hours minimum</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Maximum Guests:</span>
+                    <span className="font-semibold text-primary">1000 people</span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-muted-foreground">Confirmation:</span>

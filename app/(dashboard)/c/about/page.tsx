@@ -24,6 +24,11 @@ export default function AboutChurchPage() {
     'Brgy. Maugat'
   ];
 
+  const handleJoinCommunity = () => {
+    // Replace with your actual Facebook group/page link
+    window.open('https://www.facebook.com/sanagustinbats?mibextid=wwXIfr&rdid=OJ4i1MIm0YdMdLHc&share_url=https%3A%2F%2Fwww.facebook.com%2Fshare%2F1JgGmWMzZx%2F%3Fmibextid%3DwwXIfr#', '_blank');
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary/5 to-background">
       {/* Hero Section */}
@@ -66,13 +71,9 @@ export default function AboutChurchPage() {
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-4">
-                  <Button size="lg" className="gap-3 px-8">
+                  <Button size="lg" className="gap-3 px-8" onClick={handleJoinCommunity}>
                     <Heart className="w-5 h-5" />
                     Join Our Community
-                  </Button>
-                  <Button variant="outline" size="lg" className="gap-3 px-8">
-                    <Calendar className="w-5 h-5" />
-                    Mass Schedule
                   </Button>
                 </div>
               </div>
