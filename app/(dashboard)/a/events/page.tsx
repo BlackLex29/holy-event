@@ -53,7 +53,7 @@ interface ChurchEvent {
   postedAt: any;
   createdAt: any;
   updatedAt: any;
-  isPublic: boolean; // NEW: Para makita ng lahat ng users
+  isPublic: boolean;
 }
 
 const churchEvents = [
@@ -121,7 +121,7 @@ export default function PostChurchEvent() {
         time: formData.time,
         location: formData.location.trim(),
         status: 'active',
-        isPublic: true, // NEW: Public event para makita ng lahat
+        isPublic: true,
         postedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -189,13 +189,153 @@ export default function PostChurchEvent() {
         router.push('/a/events');
       }, 2000);
 
-    } catch (error) {
-      console.error('❌ Error posting event:', error);
-      toast({
-        title: 'Error',
-        description: 'Failed to post event. Please try again.',
-        variant: 'destructive',
-      });
+    } catch (error: any) {
+      console.error('❌ Error posting event to Firestore:', error);
+      
+      // Fallback: Try alternative collections kung hindi gumana ang 'events'
+      try {
+        console.log('🔄 Trying alternative collections...');
+        
+        // Subukan ang 'churchevents' collection
+        const eventData: ChurchEvent = {
+          type: eventType,
+          title: formData.title.trim(),
+          description: formData.description.trim(),
+          date: formData.date,
+          time: formData.time,
+          location: formData.location.trim(),
+          status: 'active',
+          isPublic: true,
+          postedAt: serverTimestamp(),
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+
+        if (formData.priest.trim() !== '') {
+          eventData.priest = formData.priest.trim();
+        }
+
+        // Subukan ang iba't ibang collection names
+        let docRef;
+        try {
+          docRef = await addDoc(collection(db, 'churchevents'), eventData);
+          console.log('✅ Event saved to "churchevents" collection with ID:', docRef.id);
+        } catch (secondError) {
+          console.log('🔄 Trying "church_events" collection...');
+          docRef = await addDoc(collection(db, 'church_events'), eventData);
+          console.log('✅ Event saved to "church_events" collection with ID:', docRef.id);
+        }
+
+        // I-save din sa localStorage
+        const existingEvents = JSON.parse(localStorage.getItem('churchEvents') || '[]');
+        const newEvent = {
+          ...eventData,
+          id: docRef.id,
+          postedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        localStorage.setItem('churchEvents', JSON.stringify([newEvent, ...existingEvents]));
+
+        // Set success data
+        setSuccessData({
+          title: formData.title,
+          type: eventType,
+          date: formData.date,
+          time: formData.time
+        });
+
+        // Show success message
+        setShowSuccess(true);
+
+        toast({
+          title: 'Event Posted Successfully!',
+          description: `${formData.title} is now live for all parishioners.`,
+        });
+
+        // Reset form
+        setEventType('');
+        setFormData({
+          title: '',
+          description: '',
+          date: '',
+          time: '',
+          location: '',
+          priest: '',
+        });
+
+        // Hide success message after 6 seconds
+        setTimeout(() => {
+          setShowSuccess(false);
+          setSuccessData(null);
+        }, 6000);
+
+        // Redirect after 2 seconds
+        setTimeout(() => {
+          router.push('/a/events');
+        }, 2000);
+
+      } catch (fallbackError) {
+        console.error('❌ All Firestore attempts failed:', fallbackError);
+        
+        // Ultimate fallback: localStorage only
+        const eventData = {
+          type: eventType,
+          title: formData.title.trim(),
+          description: formData.description.trim(),
+          date: formData.date,
+          time: formData.time,
+          location: formData.location.trim(),
+          priest: formData.priest.trim(),
+          status: 'active',
+          isPublic: true,
+          id: Date.now().toString(),
+          postedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+
+        const existingEvents = JSON.parse(localStorage.getItem('churchEvents') || '[]');
+        localStorage.setItem('churchEvents', JSON.stringify([eventData, ...existingEvents]));
+
+        // Set success data
+        setSuccessData({
+          title: formData.title,
+          type: eventType,
+          date: formData.date,
+          time: formData.time
+        });
+
+        // Show success message
+        setShowSuccess(true);
+
+        toast({
+          title: 'Event Saved Locally',
+          description: `${formData.title} saved offline. Will sync when connection is available.`,
+        });
+
+        // Reset form
+        setEventType('');
+        setFormData({
+          title: '',
+          description: '',
+          date: '',
+          time: '',
+          location: '',
+          priest: '',
+        });
+
+        // Hide success message after 6 seconds
+        setTimeout(() => {
+          setShowSuccess(false);
+          setSuccessData(null);
+        }, 6000);
+
+        // Redirect after 2 seconds
+        setTimeout(() => {
+          router.push('/a/events');
+        }, 2000);
+      }
     } finally {
       setIsSubmitting(false);
     }

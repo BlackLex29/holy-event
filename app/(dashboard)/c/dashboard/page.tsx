@@ -16,7 +16,7 @@ import {
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
 import { db } from '@/lib/firebase-config';
-import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, getDocs } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 interface Appointment {
@@ -46,6 +46,7 @@ interface ChurchEvent {
   status: 'active' | 'cancelled';
   isPublic: boolean;
   postedAt: string;
+  createdAt?: any;
 }
 
 interface UserData {
@@ -199,52 +200,91 @@ export default function ClientDashboardPage() {
           }
         );
 
-        // REAL-TIME LISTENER FOR CHURCH EVENTS FROM FIREBASE
-        const eventsQuery = query(
-          collection(db, 'events'),
-          where('status', '==', 'active'),
-          where('isPublic', '==', true),
-          orderBy('date', 'asc')
-        );
-
-        const eventsUnsubscribe = onSnapshot(eventsQuery, 
-          (querySnapshot) => {
-            const churchEvents: ChurchEvent[] = [];
-            querySnapshot.forEach((doc) => {
-              const data = doc.data();
-              const eventDate = data.date;
-              
-              // Show only future events
-              if (new Date(eventDate) >= new Date()) {
-                churchEvents.push({
-                  id: doc.id,
-                  type: data.type || '',
-                  title: data.title || '',
-                  description: data.description || '',
-                  date: eventDate,
-                  time: data.time || '',
-                  location: data.location || '',
-                  priest: data.priest || '',
-                  status: data.status || 'active',
-                  isPublic: data.isPublic || false,
-                  postedAt: data.postedAt?.toDate?.()?.toISOString() || new Date().toISOString()
-                });
-              }
-            });
+        // LOAD CHURCH EVENTS FROM FIREBASE
+        const loadChurchEvents = async () => {
+          try {
+            console.log('🔄 Loading church events from Firestore...');
             
-            // Show only upcoming 3 events
-            setUpcomingEvents(churchEvents.slice(0, 3));
-          },
-          (error) => {
-            console.error('Firebase events error:', error);
-            // Fallback to localStorage
+            // Try different collection names
+            const collectionNames = ['events', 'churchevents', 'church_events'];
+            let eventsFound = false;
+            
+            for (const collectionName of collectionNames) {
+              try {
+                const eventsQuery = query(
+                  collection(db, collectionName),
+                  where('status', '==', 'active'),
+                  orderBy('date', 'asc')
+                );
+                
+                const querySnapshot = await getDocs(eventsQuery);
+                
+                if (!querySnapshot.empty) {
+                  console.log(`✅ Found events in collection: ${collectionName}`);
+                  const churchEvents: ChurchEvent[] = [];
+                  
+                  querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const eventDate = data.date;
+                    
+                    // Check if event is public and in the future
+                    const isPublic = data.isPublic !== false; // Default to true if not specified
+                    const isFutureEvent = new Date(eventDate) >= new Date();
+                    
+                    if (isPublic && isFutureEvent) {
+                      churchEvents.push({
+                        id: doc.id,
+                        type: data.type || '',
+                        title: data.title || '',
+                        description: data.description || '',
+                        date: eventDate,
+                        time: data.time || '',
+                        location: data.location || '',
+                        priest: data.priest || '',
+                        status: data.status || 'active',
+                        isPublic: data.isPublic || true,
+                        postedAt: data.postedAt?.toDate?.()?.toISOString() || data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString()
+                      });
+                    }
+                  });
+                  
+                  if (churchEvents.length > 0) {
+                    console.log(`🎯 Loaded ${churchEvents.length} events from ${collectionName}`);
+                    // Sort by date and get upcoming 3 events
+                    const sortedEvents = churchEvents
+                      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                      .slice(0, 3);
+                    
+                    setUpcomingEvents(sortedEvents);
+                    eventsFound = true;
+                    
+                    // Save to localStorage as backup
+                    localStorage.setItem('churchEvents', JSON.stringify(churchEvents));
+                    break;
+                  }
+                }
+              } catch (error) {
+                console.log(`❌ No events found in ${collectionName}:`, error);
+                continue;
+              }
+            }
+            
+            if (!eventsFound) {
+              console.log('📱 No events found in Firestore, falling back to localStorage');
+              loadEventsFromLocalStorage();
+            }
+            
+          } catch (error) {
+            console.error('❌ Error loading church events:', error);
             loadEventsFromLocalStorage();
           }
-        );
+        };
+
+        // Load church events
+        loadChurchEvents();
 
         return () => {
           appointmentsUnsubscribe();
-          eventsUnsubscribe();
         };
 
       } catch (error) {
@@ -372,11 +412,82 @@ export default function ClientDashboardPage() {
 
   const upcomingAppointment = getUpcomingAppointment();
 
-  // Handle manual refresh of appointments
-  const handleRefreshAppointments = () => {
+  // Handle manual refresh of appointments and events
+  const handleRefreshData = async () => {
     setLoading(true);
-    loadAppointmentsFromLocalStorage();
-    setTimeout(() => setLoading(false), 1000);
+    try {
+      // Reload church events from Firestore
+      const collectionNames = ['events', 'churchevents', 'church_events'];
+      
+      for (const collectionName of collectionNames) {
+        try {
+          const eventsQuery = query(
+            collection(db, collectionName),
+            where('status', '==', 'active'),
+            orderBy('date', 'asc')
+          );
+          
+          const querySnapshot = await getDocs(eventsQuery);
+          
+          if (!querySnapshot.empty) {
+            const churchEvents: ChurchEvent[] = [];
+            
+            querySnapshot.forEach((doc) => {
+              const data = doc.data();
+              const eventDate = data.date;
+              const isPublic = data.isPublic !== false;
+              const isFutureEvent = new Date(eventDate) >= new Date();
+              
+              if (isPublic && isFutureEvent) {
+                churchEvents.push({
+                  id: doc.id,
+                  type: data.type || '',
+                  title: data.title || '',
+                  description: data.description || '',
+                  date: eventDate,
+                  time: data.time || '',
+                  location: data.location || '',
+                  priest: data.priest || '',
+                  status: data.status || 'active',
+                  isPublic: data.isPublic || true,
+                  postedAt: data.postedAt?.toDate?.()?.toISOString() || data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString()
+                });
+              }
+            });
+            
+            if (churchEvents.length > 0) {
+              const sortedEvents = churchEvents
+                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                .slice(0, 3);
+              
+              setUpcomingEvents(sortedEvents);
+              localStorage.setItem('churchEvents', JSON.stringify(churchEvents));
+              
+              toast({
+                title: 'Data Refreshed',
+                description: `Loaded ${churchEvents.length} events from ${collectionName}`,
+              });
+              break;
+            }
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+      
+      // Reload appointments from localStorage
+      loadAppointmentsFromLocalStorage();
+      
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+      toast({
+        title: 'Refresh Failed',
+        description: 'Using cached data',
+        variant: 'destructive',
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (!isAuthenticated) {
@@ -455,8 +566,9 @@ export default function ClientDashboardPage() {
                 <Button 
                   variant="ghost" 
                   size="sm" 
-                  onClick={handleRefreshAppointments}
+                  onClick={handleRefreshData}
                   className="h-6 w-6 p-0"
+                  disabled={loading}
                 >
                   🔄
                 </Button>
@@ -475,11 +587,16 @@ export default function ClientDashboardPage() {
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Upcoming Events
               </CardTitle>
-              <CalendarDays className="w-5 h-5 text-blue-600" />
+              <div className="flex items-center gap-2">
+                <CalendarDays className="w-5 h-5 text-blue-600" />
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                  Live
+                </span>
+              </div>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{upcomingEvents.length}</div>
-              <p className="text-xs text-muted-foreground">Live from parish</p>
+              <p className="text-xs text-muted-foreground">From parish calendar</p>
             </CardContent>
           </Card>
         </div>
@@ -599,7 +716,9 @@ export default function ClientDashboardPage() {
             <Card>
               <CardHeader>
                 <CardTitle>Upcoming Church Events</CardTitle>
-                <CardDescription>Live events from the parish</CardDescription>
+                <CardDescription>
+                  Live events from the parish • {upcomingEvents.length} events found
+                </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
@@ -608,6 +727,14 @@ export default function ClientDashboardPage() {
                       <CalendarDays className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No upcoming events</p>
                       <p className="text-sm mt-2">Check back later for new events</p>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={handleRefreshData}
+                        className="mt-2"
+                      >
+                        Refresh Events
+                      </Button>
                     </div>
                   ) : (
                     upcomingEvents.map((event) => (
@@ -677,6 +804,15 @@ export default function ClientDashboardPage() {
                       <MapPin className="w-4 h-4 mr-2" />
                       Church Virtual View
                     </Link>
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={handleRefreshData}
+                    disabled={loading}
+                  >
+                    <CalendarDays className="w-4 h-4 mr-2" />
+                    Refresh Events
                   </Button>
                 </div>
               </CardContent>
