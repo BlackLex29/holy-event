@@ -1,1444 +1,680 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { format, isSunday, parseISO, isValid } from 'date-fns';
-import {
-  Calendar as CalendarIcon,
-  Clock,
-  MapPin,
-  Users,
-  Church,
-  Phone,
-  Mail,
-  CheckCircle,
-  XCircle,
-  FileText,
-  UserCheck,
-  FileCheck,
-  BookOpen,
-} from 'lucide-react';
-import { useForm, useWatch } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import * as z from 'zod';
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
 } from '@/components/ui/select';
-import { Calendar } from '@/components/ui/calendar';
+import { Church, Calendar, MailCheck, RefreshCw, Check, X, Home, Eye, EyeOff } from 'lucide-react';
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from '@/components/ui/popover';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { useToast } from '@/components/ui/use-toast';
-import { cn } from '@/lib/utils';
-import { db } from '@/lib/firebase-config';
-import { 
-  collection, 
-  addDoc, 
-  serverTimestamp,
-  Timestamp,
-  FieldValue 
-} from 'firebase/firestore';
+    createUserWithEmailAndPassword,
+    updateProfile,
+    sendEmailVerification,
+    User
+} from 'firebase/auth';
+import { auth, db } from '@/lib/firebase-config';
+import { doc, setDoc, getDocs, query, where, collection } from 'firebase/firestore';
 
-// ==================== ZOD SCHEMA ====================
-const formSchema = z.object({
-  eventType: z.string().min(1, 'Please select an event type'),
-  fullName: z.string().min(2, 'Name must be at least 2 characters'),
-  email: z.string().email('Invalid email address'),
-  phone: z.string()
-    .min(11, 'Phone number must be exactly 11 digits')
-    .max(11, 'Phone number must be exactly 11 digits')
-    .regex(/^09\d{9}$/, 'Phone number must start with 09 and contain exactly 11 digits'),
-  eventDate: z.date().refine(
-    (date) => date && date >= new Date(),
-    { message: 'Please select a valid future date' }
-  ),
-  eventTime: z.string().min(1, 'Please select a time'),
-  guestCount: z.string()
-    .min(1, 'Please enter number of capacity')
-    .refine((val) => {
-      const count = parseInt(val);
-      return count >= 1 && count <= 1000;
-    }, 'Guest count must be between 1 and 1000'),
-  message: z.string()
-    .max(50, 'Additional notes cannot exceed 50 characters')
-    .optional(),
-});
-
-type FormData = z.infer<typeof formSchema>;
-
-// ==================== INTERFACES ====================
-interface ChurchEvent {
-  id: string;
-  type: string;
-  title: string;
-  description: string;
-  date: string;
-  time: string;
-  location: string;
-  priest?: string;
-  postedAt: Timestamp | Date | string;
-  status?: string;
-  createdAt?: Timestamp | Date | string;
-  updatedAt?: Timestamp | Date | string;
-}
-
-interface AppointmentData {
-  fullName: string;
-  email: string;
-  phone: string;
-  eventType: string;
-  eventDate: string;
-  eventTime: string;
-  guestCount: string;
-  message?: string;
-  status: string;
-  createdAt: FieldValue;
-  updatedAt: FieldValue;
-  userId?: string;
-}
-
-interface UserAppointment {
-  id: string;
-  fullName: string;
-  email: string;
-  phone: string;
-  eventType: string;
-  eventDate: string;
-  eventTime: string;
-  guestCount: string;
-  message?: string;
-  status: string;
-  createdAt: string;
-  firebaseId?: string;
-  userId?: string;
-}
-
-// ==================== ALLOWED TIMES ====================
-const allowedTimes: Record<string, string[]> = {
-  mass: ['06:00', '07:30', '17:00'],
-  wedding: ['10:00', '14:00', '16:00'],
-  baptism: ['07:00', '15:00'],
-  funeral: ['09:00', '13:00'],
-  confirmation: ['10:00', '14:00'],
-};
-
-// Event type mapping for display
-const eventTypeMap: Record<string, string> = {
-  mass: 'Holy Mass',
-  wedding: 'Wedding',
-  baptism: 'Baptism',
-  funeral: 'Funeral Mass',
-  confirmation: 'Confirmation',
-};
-
-// ==================== SERVICE REQUIREMENTS ====================
-const serviceRequirements = {
-  funeral: {
-    title: "Requirements for Catholic Funeral Service (Libing)",
-    icon: FileText,
-    items: [
-      "Death Certificate",
-      "Information about the deceased (name, age, address, parish)",
-      "Schedule coordination with the parish office",
-      "Payment for funeral mass or offering (varies per parish)",
-      "If burial is in a Catholic cemetery, burial permit",
-      "For bringing remains into the church: parish approval",
-      "Family's request form for funeral mass",
-      "Priest availability confirmation"
-    ]
-  },
-  wedding: {
-    title: "Requirements for Catholic Marriage (Kasal)",
-    icon: UserCheck,
-    items: [
-      "Baptismal Certificate (for marriage purposes)",
-      "Confirmation Certificate",
-      "Marriage License from the Local Civil Registrar",
-      "Certificate of No Marriage (CENOMAR)",
-      "Pre-Cana seminar",
-      "Canonical interview with the priest",
-      "Marriage Banns (announced in the parish for 3 consecutive Sundays)",
-      "List of sponsors (ninong/ninang)",
-      "Confession before the wedding",
-      "If applicable: Permission from bishop for mixed marriage (Catholic + non-Catholic)",
-      "If applicable: Certificate of Freedom to Marry (for OFW or abroad)",
-      "If applicable: Annulment/Death Certificate (if widow-widower or marriage was nullified)"
-    ]
-  },
-  baptism: {
-    title: "Requirements for Baptism (Binyag)",
-    icon: FileCheck,
-    items: [
-      "Birth Certificate of the child",
-      "Parents must be married in the Church or planning to marry (varies by parish)",
-      "Attendance in pre-baptism seminar (parents & godparents)",
-      "List of godparents (usually at least 1 Catholic godparent)",
-      "Godparents must have received Confirmation",
-      "Baptismal information form from the parish",
-      "Parent/guardian consent"
-    ]
-  },
-  confirmation: {
-    title: "Requirements for Confirmation (Kumpil)",
-    icon: BookOpen,
-    items: [
-      "Must be a baptized Catholic",
-      "Confirmation preparation classes or catechism",
-      "Must be in a state of grace (usually goes to confession before the ceremony)",
-      "Birth Certificate (Civil)",
-      "Baptismal Certificate (fresh copy from parish)",
-      "Sponsor / Godparent who is a practicing Catholic",
-      "Confirmation name (usually a saint's name)",
-      "Attendance in parish orientation or seminar",
-      "Parent/guardian consent (if minor)"
-    ]
-  },
-  mass: {
-    title: "Requirements for Holy Mass",
-    icon: Church,
-    items: [
-      "Schedule coordination with the parish office",
-      "Special intention request form",
-      "Offering/donation for the mass",
-      "Advance booking (at least 1 week before)",
-      "Confirmation from parish secretary"
-    ]
-  }
-};
-
-// ==================== DATE HELPER FUNCTIONS ====================
-const safeFormatDate = (date: Date | string, formatStr: string): string => {
-  try {
-    let dateObj: Date;
+const RegisterPage = () => {
+    const router = useRouter();
     
-    if (typeof date === 'string') {
-      dateObj = parseISO(date);
-      if (!isValid(dateObj)) {
-        const [year, month, day] = date.split('-').map(Number);
-        dateObj = new Date(year, month - 1, day);
-      }
-    } else {
-      dateObj = date;
-    }
-    
-    if (!isValid(dateObj)) {
-      return 'Invalid date';
-    }
-    
-    return format(dateObj, formatStr);
-  } catch (error) {
-    console.error('Date formatting error:', error);
-    return 'Invalid date';
-  }
-};
+    const ADMIN_EMAIL = process.env.NEXT_PUBLIC_ADMIN_EMAIL || 'cccangeles05@gmail.com';
 
-const safeFormatTime = (time24: string): string => {
-  if (!time24) return '—';
-  
-  try {
-    const [h, m] = time24.split(':').map(Number);
-    const d = new Date();
-    d.setHours(h, m, 0, 0);
-    
-    if (!isValid(d)) {
-      return time24;
-    }
-    
-    return format(d, 'h:mm a');
-  } catch (error) {
-    console.error('Time formatting error:', error);
-    return time24;
-  }
-};
+    const [error, setError] = useState('');
+    const [showTerms, setShowTerms] = useState(false);
+    const [acceptedTerms, setAcceptedTerms] = useState(false);
+    const [submitted, setSubmitted] = useState(false);
+    const [checkingEmail, setCheckingEmail] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
+    const [registrationStep, setRegistrationStep] = useState<'form' | 'verification'>('form');
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
 
-const parseEventDate = (dateString: string): Date | null => {
-  try {
-    const [year, month, day] = dateString.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-    
-    if (isValid(date)) {
-      return date;
-    }
-    
-    const isoDate = parseISO(dateString);
-    if (isValid(isoDate)) {
-      return isoDate;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Date parsing error:', error);
-    return null;
-  }
-};
-
-// ==================== USER ID MANAGEMENT ====================
-const getUserId = (): string => {
-  let userId = localStorage.getItem('church_appointment_userId');
-  if (!userId) {
-    userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('church_appointment_userId', userId);
-  }
-  return userId;
-};
-
-const getUserEmail = (): string | null => {
-  return localStorage.getItem('church_appointment_userEmail');
-};
-
-const setUserEmail = (email: string) => {
-  localStorage.setItem('church_appointment_userEmail', email);
-};
-
-// ==================== GET USER INFO FROM AUTH ====================
-const getCurrentUserInfo = (): {email?: string; fullName?: string; phone?: string} | null => {
-  if (typeof window === 'undefined') return null;
-  
-  try {
-    // Check if user is logged in via Firebase Auth or localStorage
-    const userEmail = localStorage.getItem('church_appointment_userEmail');
-    const userFullName = localStorage.getItem('church_appointment_userFullName');
-    const userPhone = localStorage.getItem('church_appointment_userPhone');
-    
-    // Alternative: Check for common auth patterns
-    const firebaseUser = localStorage.getItem('firebase:authUser:YOUR_FIREBASE_API_KEY:[DEFAULT]');
-    const authUser = localStorage.getItem('authUser');
-    const userData = localStorage.getItem('user');
-    
-    const userInfo: {email?: string; fullName?: string; phone?: string} = {};
-    
-    // Priority 1: Church appointment specific storage
-    if (userEmail) userInfo.email = userEmail;
-    if (userFullName) userInfo.fullName = userFullName;
-    if (userPhone) userInfo.phone = userPhone;
-    
-    // Priority 2: Firebase Auth
-    if (firebaseUser && !userInfo.email) {
-      try {
-        const firebaseData = JSON.parse(firebaseUser);
-        if (firebaseData.email) {
-          userInfo.email = firebaseData.email;
-          if (firebaseData.displayName && !userInfo.fullName) {
-            userInfo.fullName = firebaseData.displayName;
-          }
-        }
-      } catch (e) {
-        console.log('Firebase auth parsing failed');
-      }
-    }
-    
-    // Priority 3: Generic auth storage
-    if (authUser && !userInfo.email) {
-      try {
-        const authData = JSON.parse(authUser);
-        if (authData.email) userInfo.email = authData.email;
-        if (authData.name && !userInfo.fullName) userInfo.fullName = authData.name;
-        if (authData.phone && !userInfo.phone) userInfo.phone = authData.phone;
-      } catch (e) {
-        console.log('Auth user parsing failed');
-      }
-    }
-    
-    // Priority 4: Generic user storage
-    if (userData && !userInfo.email) {
-      try {
-        const userDataObj = JSON.parse(userData);
-        if (userDataObj.email) userInfo.email = userDataObj.email;
-        if (userDataObj.name && !userInfo.fullName) userInfo.fullName = userDataObj.name;
-        if (userDataObj.phone && !userInfo.phone) userInfo.phone = userDataObj.phone;
-      } catch (e) {
-        console.log('User data parsing failed');
-      }
-    }
-    
-    return Object.keys(userInfo).length > 0 ? userInfo : null;
-  } catch (error) {
-    console.error('Error getting user info:', error);
-    return null;
-  }
-};
-
-// ==================== AUTO-EMAIL DETECTION ====================
-const detectUserEmail = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  
-  try {
-    // Check multiple possible sources for user email
-    const sources = [
-      // Church appointment specific
-      localStorage.getItem('church_appointment_userEmail'),
-      
-      // Firebase Auth
-      (() => {
-        try {
-          const firebaseUser = localStorage.getItem('firebase:authUser:YOUR_FIREBASE_API_KEY:[DEFAULT]');
-          if (firebaseUser) {
-            const data = JSON.parse(firebaseUser);
-            return data.email;
-          }
-        } catch (e) {
-          return null;
-        }
-      })(),
-      
-      // Generic auth
-      (() => {
-        try {
-          const authUser = localStorage.getItem('authUser');
-          if (authUser) {
-            const data = JSON.parse(authUser);
-            return data.email;
-          }
-        } catch (e) {
-          return null;
-        }
-      })(),
-      
-      // Generic user data
-      (() => {
-        try {
-          const userData = localStorage.getItem('user');
-          if (userData) {
-            const data = JSON.parse(userData);
-            return data.email;
-          }
-        } catch (e) {
-          return null;
-        }
-      })(),
-      
-      // Session storage alternatives
-      sessionStorage.getItem('userEmail'),
-      localStorage.getItem('userEmail'),
-    ];
-    
-    // Return the first valid email found
-    for (const email of sources) {
-      if (email && typeof email === 'string' && email.includes('@') && email.includes('.')) {
-        console.log('📧 Auto-detected user email:', email);
-        return email;
-      }
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Error detecting user email:', error);
-    return null;
-  }
-};
-
-// ==================== MAIN COMPONENT ====================
-export default function EventAppointmentPage() {
-  const { toast } = useToast();
-  const [date, setDate] = useState<Date | undefined>(undefined);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [successData, setSuccessData] = useState<{name: string; eventType: string; date: string; time: string} | null>(null);
-  const [notesCount, setNotesCount] = useState(0);
-  const [userAppointments, setUserAppointments] = useState<UserAppointment[]>([]);
-  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
-  const [currentUserInfo, setCurrentUserInfo] = useState<{email?: string; fullName?: string; phone?: string} | null>(null);
-  const [autoFilledEmail, setAutoFilledEmail] = useState<string | null>(null);
-
-  const {
-    register,
-    handleSubmit,
-    setValue,
-    control,
-    reset,
-    trigger,
-    watch,
-    formState: { errors },
-  } = useForm<FormData>({
-    resolver: zodResolver(formSchema),
-    mode: 'onChange',
-    defaultValues: {
-      guestCount: '1'
-    }
-  });
-
-  const eventType = useWatch({ control, name: 'eventType' });
-  const eventTime = useWatch({ control, name: 'eventTime' });
-  const message = watch('message');
-  const email = watch('email');
-  const guestCount = watch('guestCount');
-
-  // Watch for message changes to update character count
-  useEffect(() => {
-    setNotesCount(message?.length || 0);
-  }, [message]);
-
-  // Load user info and appointments on component mount
-  useEffect(() => {
-    loadUserInfo();
-    loadUserAppointments();
-  }, []);
-
-  // Auto-detect and fill user email on component mount
-  useEffect(() => {
-    const detectedEmail = detectUserEmail();
-    if (detectedEmail) {
-      setAutoFilledEmail(detectedEmail);
-      setValue('email', detectedEmail, { shouldValidate: true });
-      
-      toast({
-        title: 'Email Auto-filled!',
-        description: `We detected your email: ${detectedEmail}`,
-        variant: 'default',
-      });
-    }
-  }, [setValue, toast]);
-
-  // Load user information from localStorage/auth
-  const loadUserInfo = () => {
-    const userInfo = getCurrentUserInfo();
-    setCurrentUserInfo(userInfo);
-    
-    if (userInfo?.email) {
-      setCurrentUserEmail(userInfo.email);
-      setValue('email', userInfo.email);
-      
-      // Auto-fill other fields if available
-      if (userInfo.fullName) {
-        setValue('fullName', userInfo.fullName);
-      }
-      if (userInfo.phone) {
-        setValue('phone', userInfo.phone);
-      }
-      
-      toast({
-        title: 'Welcome Back!',
-        description: 'Your information has been auto-filled.',
-        variant: 'default',
-      });
-    }
-  };
-
-  // Auto-clear time when event type changes
-  useEffect(() => {
-    if (eventType && eventTime && !allowedTimes[eventType]?.includes(eventTime)) {
-      setValue('eventTime', '');
-      trigger('eventTime');
-    }
-  }, [eventType, eventTime, setValue, trigger]);
-
-  // Disable non-Sunday dates for Baptism
-  const isDateDisabled = (date: Date) => {
-    if (eventType === 'baptism') {
-      return !isSunday(date);
-    }
-    return date < new Date();
-  };
-
-  // Auto-select next Sunday when Baptism is selected
-  useEffect(() => {
-    if (eventType === 'baptism' && (!date || !isSunday(date))) {
-      const today = new Date();
-      const nextSunday = new Date(today);
-      nextSunday.setDate(today.getDate() + (7 - today.getDay()));
-      nextSunday.setHours(0, 0, 0, 0);
-      
-      setDate(nextSunday);
-      setValue('eventDate', nextSunday);
-      trigger('eventDate');
-      
-      toast({
-        title: 'Baptism Scheduled',
-        description: 'Automatically selected next Sunday for baptism',
-      });
-    }
-  }, [eventType, date, setValue, trigger, toast]);
-
-  // Phone number formatting
-  const formatPhoneNumber = (value: string) => {
-    const numbers = value.replace(/\D/g, '');
-    if (numbers.length <= 11) {
-      return numbers;
-    }
-    return numbers.slice(0, 11);
-  };
-
-  // Handle phone number input
-  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const formatted = formatPhoneNumber(e.target.value);
-    setValue('phone', formatted, { shouldValidate: true });
-  };
-
-  // Handle guest count input with maximum limit
-  const handleGuestCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value;
-    
-    // Remove non-numeric characters
-    value = value.replace(/\D/g, '');
-    
-    // If empty, set to empty string
-    if (value === '') {
-      setValue('guestCount', '', { shouldValidate: true });
-      return;
-    }
-    
-    // Convert to number and check maximum
-    const count = parseInt(value);
-    if (count > 1000) {
-      setValue('guestCount', '1000', { shouldValidate: true });
-      toast({
-        title: 'Maximum Guests Reached',
-        description: 'Guest count has been set to the maximum of 1000',
-        variant: 'default',
-      });
-    } else {
-      setValue('guestCount', value, { shouldValidate: true });
-    }
-  };
-
-  // Load user appointments from localStorage - PRIVATE na!
-  const loadUserAppointments = () => {
-    try {
-      const stored = localStorage.getItem('appointments');
-      if (stored) {
-        const allAppointments = JSON.parse(stored);
-        const currentUserEmail = getUserEmail();
-        const userId = getUserId();
-        
-        // Filter: I-display lang ang appointments ng current user
-        const userAppointments = allAppointments.filter((appointment: UserAppointment) => 
-          appointment.userId === userId || appointment.email === currentUserEmail
-        );
-        
-        // Sort by date (newest first) with safe date comparison
-        const sortedAppointments = userAppointments.sort((a: UserAppointment, b: UserAppointment) => {
-          const dateA = parseEventDate(a.createdAt) || new Date(0);
-          const dateB = parseEventDate(b.createdAt) || new Date(0);
-          return dateB.getTime() - dateA.getTime();
-        });
-        
-        setUserAppointments(sortedAppointments);
-      }
-    } catch (error) {
-      console.error('Error loading appointments from localStorage:', error);
-    }
-  };
-
-  // Clear all user appointments (for testing)
-  const clearUserAppointments = () => {
-    localStorage.removeItem('appointments');
-    setUserAppointments([]);
-    toast({
-      title: 'Appointments Cleared',
-      description: 'All your appointments have been cleared.',
+    const [formData, setFormData] = useState({
+        fullName: '',
+        phoneNumber: '',
+        email: '',
+        password: '',
+        address: '',
+        birthdate: '',
+        gender: '',
     });
-  };
 
-  // SUBMIT TO FIREBASE WITH SUCCESS MESSAGE
-  const onSubmit = async (data: FormData) => {
-    setIsSubmitting(true);
-    try {
-      const userId = getUserId();
-      const userEmail = data.email.trim();
-      
-      // Save user email for future identification
-      setUserEmail(userEmail);
-      setCurrentUserEmail(userEmail);
+    const [passwordValidation, setPasswordValidation] = useState({
+        hasMinLength: false,
+        hasUpperCase: false,
+        hasLowerCase: false,
+        hasNumber: false,
+        hasSpecialChar: false,
+    });
 
-      // Also save name and phone for future auto-fill
-      if (data.fullName) {
-        localStorage.setItem('church_appointment_userFullName', data.fullName.trim());
-      }
-      if (data.phone) {
-        localStorage.setItem('church_appointment_userPhone', data.phone.trim());
-      }
-
-      // Prepare data for Firestore
-      const appointmentData: AppointmentData = {
-        fullName: data.fullName.trim(),
-        email: userEmail,
-        phone: data.phone.trim(),
-        eventType: data.eventType,
-        eventDate: format(data.eventDate, 'yyyy-MM-dd'),
-        eventTime: data.eventTime,
-        guestCount: data.guestCount,
-        status: 'pending',
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        userId: userId,
-      };
-
-      // Add message only if it exists and trim to 50 characters
-      if (data.message && data.message.trim() !== '') {
-        appointmentData.message = data.message.trim().substring(0, 50);
-      }
-
-      console.log('📤 Submitting appointment to Firestore:', appointmentData);
-
-      // Save to Firebase
-      const docRef = await addDoc(collection(db, 'appointments'), appointmentData);
-
-      console.log('✅ Appointment saved to Firestore with ID:', docRef.id);
-
-      // Also save to localStorage as backup
-      const appointment: UserAppointment = {
-        id: docRef.id,
-        fullName: data.fullName.trim(),
-        email: userEmail,
-        phone: data.phone.trim(),
-        eventType: data.eventType,
-        eventDate: format(data.eventDate, 'yyyy-MM-dd'),
-        eventTime: data.eventTime,
-        guestCount: data.guestCount,
-        status: 'pending',
-        createdAt: new Date().toISOString(),
-        firebaseId: docRef.id,
-        userId: userId,
-      };
-
-      if (data.message && data.message.trim() !== '') {
-        appointment.message = data.message.trim().substring(0, 50);
-      }
-
-      const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
-      existing.push(appointment);
-      localStorage.setItem('appointments', JSON.stringify(existing));
-
-      // Update local state
-      loadUserAppointments();
-
-      // Set success data
-      setSuccessData({
-        name: data.fullName,
-        eventType: data.eventType,
-        date: safeFormatDate(data.eventDate, 'PPP'),
-        time: safeFormatTime(data.eventTime)
-      });
-
-      // Show success message
-      setShowSuccess(true);
-
-      // Reset form but keep email and user info
-      reset({
-        email: data.email,
-        fullName: data.fullName,
-        phone: data.phone,
-        guestCount: '1'
-      });
-      setDate(undefined);
-      setNotesCount(0);
-
-      // Hide success message after 8 seconds
-      setTimeout(() => {
-        setShowSuccess(false);
-        setSuccessData(null);
-      }, 8000);
-
-      toast({
-        title: 'Appointment Submitted!',
-        description: 'We will contact you within 24 hours to confirm.',
-        variant: 'default',
-      });
-
-    } catch (error: any) {
-      console.error('❌ Error submitting appointment to Firestore:', error);
-      
-      // Fallback to localStorage only if Firebase fails
-      try {
-        const userId = getUserId();
-        const userEmail = data.email.trim();
-        
-        setUserEmail(userEmail);
-        setCurrentUserEmail(userEmail);
-
-        // Also save name and phone for future auto-fill
-        if (data.fullName) {
-          localStorage.setItem('church_appointment_userFullName', data.fullName.trim());
-        }
-        if (data.phone) {
-          localStorage.setItem('church_appointment_userPhone', data.phone.trim());
-        }
-
-        const appointment: UserAppointment = {
-          id: Date.now().toString(),
-          fullName: data.fullName.trim(),
-          email: userEmail,
-          phone: data.phone.trim(),
-          eventType: data.eventType,
-          eventDate: format(data.eventDate, 'yyyy-MM-dd'),
-          eventTime: data.eventTime,
-          guestCount: data.guestCount,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-          userId: userId,
+    const validatePassword = (password: string) => {
+        const validations = {
+            hasMinLength: password.length >= 8,
+            hasUpperCase: /[A-Z]/.test(password),
+            hasLowerCase: /[a-z]/.test(password),
+            hasNumber: /[0-9]/.test(password),
+            hasSpecialChar: /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password),
         };
+        setPasswordValidation(validations);
+        return Object.values(validations).every(Boolean);
+    };
 
-        if (data.message && data.message.trim() !== '') {
-          appointment.message = data.message.trim().substring(0, 50);
+    const handlePasswordChange = (password: string) => {
+        handleChange('password', password);
+        validatePassword(password);
+    };
+
+    const isPasswordValid = Object.values(passwordValidation).every(Boolean);
+
+    const handleChange = (field: string, value: string) => {
+        setFormData((prev) => ({
+            ...prev,
+            [field]: value,
+        }));
+    };
+
+    const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const value = e.target.value.replace(/\D/g, '').slice(0, 11);
+        handleChange('phoneNumber', value);
+    };
+
+    const checkEmailExists = async (email: string): Promise<boolean> => {
+        try {
+            const usersQuery = query(
+                collection(db, 'users'),
+                where('email', '==', email.toLowerCase())
+            );
+            
+            const querySnapshot = await getDocs(usersQuery);
+            return !querySnapshot.empty;
+        } catch (error: any) {
+            console.error('Error checking email:', error);
+            
+            // If permission error, skip the check and proceed
+            if (error?.code === 'permission-denied' || 
+                error?.message?.includes('permission') || 
+                error?.message?.includes('Missing or insufficient permissions')) {
+                console.warn('Permission denied checking email, proceeding with registration');
+                return false; // Assume email doesn't exist
+            }
+            
+            // For other errors, don't block registration
+            console.warn('Error checking email existence, proceeding anyway:', error);
+            return false; // Assume email doesn't exist to allow registration
+        }
+    };
+
+    const calculateAge = (birthdate: string): number => {
+        const birthDate = new Date(birthdate);
+        const today = new Date();
+        const age = today.getFullYear() - birthDate.getFullYear();
+        
+        const hasBirthdayOccurred = 
+            today.getMonth() > birthDate.getMonth() || 
+            (today.getMonth() === birthDate.getMonth() && today.getDate() >= birthDate.getDate());
+        
+        return hasBirthdayOccurred ? age : age - 1;
+    };
+
+    // FIXED: Email verification with proper domain configuration
+    const sendFirebaseVerificationEmail = async (user: User) => {
+        try {
+            // Check if running on localhost or production
+            const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            
+            // Set the continue URL based on environment
+            // IMPORTANT: Replace 'holy-event.vercel.app' with your actual production domain
+            const continueUrl = isLocalhost 
+                ? `http://localhost:3000/login?verified=true`
+                : `https://holy-event.vercel.app/login?verified=true`;
+            
+            // Configure action code settings
+            const actionCodeSettings = {
+                url: continueUrl,
+                handleCodeInApp: true,
+            };
+
+            await sendEmailVerification(user, actionCodeSettings);
+            
+            console.log('✅ Verification email sent successfully to:', user.email);
+            console.log('Continue URL:', continueUrl);
+            return true;
+        } catch (error: any) {
+            console.error('❌ Error sending verification email:', error);
+            
+            // Specific error handling
+            if (error.code === 'auth/too-many-requests') {
+                throw new Error('Too many verification emails sent. Please wait a few minutes before trying again.');
+            } else if (error.code === 'auth/invalid-email') {
+                throw new Error('Invalid email address. Please check your email.');
+            } else if (error.code === 'auth/user-disabled') {
+                throw new Error('This account has been disabled. Please contact support.');
+            } else if (error.code === 'auth/invalid-continue-uri') {
+                throw new Error('Configuration error. Please contact support.');
+            } else {
+                throw new Error('Failed to send verification email. Please try again or contact support if the problem persists.');
+            }
+        }
+    };
+
+    const createFirebaseUser = async () => {
+        try {
+            // Create user in Firebase Auth
+            const userCredential = await createUserWithEmailAndPassword(
+                auth,
+                formData.email,
+                formData.password
+            );
+
+            const user = userCredential.user;
+            setCurrentUser(user);
+
+            // Update profile with display name
+            await updateProfile(user, {
+                displayName: formData.fullName
+            });
+
+            // Calculate age and determine role
+            const finalAge = calculateAge(formData.birthdate);
+            const role = formData.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'admin' : 'user';
+            
+            // Prepare user data for Firestore
+            const userData = {
+                fullName: formData.fullName,
+                email: formData.email.toLowerCase(),
+                phoneNumber: formData.phoneNumber,
+                address: formData.address,
+                birthdate: formData.birthdate,
+                age: finalAge,
+                gender: formData.gender,
+                role: role,
+                status: 'pending',
+                emailVerified: false,
+                createdAt: new Date(),
+                parishionerId: `P-${new Date().getFullYear()}-${user.uid.slice(-5).toUpperCase()}`,
+            };
+
+            // Save user data to Firestore
+            await setDoc(doc(db, 'users', user.uid), userData);
+            
+            // Save authentication data
+            await setDoc(doc(db, 'authentication', user.uid), {
+                email: formData.email.toLowerCase(),
+                emailVerified: false,
+                status: 'pending',
+                createdAt: new Date(),
+                lastVerificationEmailSent: new Date()
+            });
+
+            return user;
+
+        } catch (err: any) {
+            console.error('Firebase creation error:', err);
+            
+            if (err.code === 'auth/email-already-in-use') {
+                throw new Error('This email is already registered. Please use a different email or sign in.');
+            } else if (err.code === 'auth/weak-password') {
+                throw new Error('Password is too weak. Please use a stronger password.');
+            } else if (err.code === 'auth/invalid-email') {
+                throw new Error('Invalid email address. Please check your email.');
+            } else if (err.code === 'auth/operation-not-allowed') {
+                throw new Error('Email/password accounts are not enabled. Please contact support.');
+            } else if (err.code === 'auth/network-request-failed') {
+                throw new Error('Network error. Please check your internet connection.');
+            } else if (err.code === 'auth/too-many-requests') {
+                throw new Error('Too many attempts. Please try again later.');
+            } else {
+                throw new Error(err.message || 'Registration failed. Please try again.');
+            }
+        }
+    };
+
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+
+        if (!acceptedTerms) {
+            setError('Please accept the terms and conditions');
+            return;
         }
 
-        const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
-        existing.push(appointment);
-        localStorage.setItem('appointments', JSON.stringify(existing));
+        if (!isPasswordValid) {
+            setError('Please ensure your password meets all requirements');
+            return;
+        }
 
-        // Update local state
-        loadUserAppointments();
+        if (formData.phoneNumber.length !== 11) {
+            setError('Phone number must be exactly 11 digits');
+            return;
+        }
 
-        // Set success data for offline submission
-        setSuccessData({
-          name: data.fullName,
-          eventType: data.eventType,
-          date: safeFormatDate(data.eventDate, 'PPP'),
-          time: safeFormatTime(data.eventTime)
-        });
+        if (!formData.birthdate) {
+            setError('Please enter your birthdate');
+            return;
+        }
 
-        // Show success message
-        setShowSuccess(true);
+        const finalAge = calculateAge(formData.birthdate);
 
-        // Reset form but keep email and user info
-        reset({
-          email: data.email,
-          fullName: data.fullName,
-          phone: data.phone,
-          guestCount: '1'
-        });
-        setDate(undefined);
-        setNotesCount(0);
+        if (finalAge < 13) {
+            setError('You must be at least 13 years old to register');
+            return;
+        }
 
-        // Hide success message after 8 seconds
-        setTimeout(() => {
-          setShowSuccess(false);
-          setSuccessData(null);
-        }, 8000);
+        if (finalAge > 120) {
+            setError('Please enter a valid birthdate');
+            return;
+        }
 
-        toast({
-          title: 'Appointment Submitted (Offline)',
-          description: 'We will sync with server when connection is restored.',
-          variant: 'default',
-        });
+        try {
+            setSubmitted(true);
+            setCheckingEmail(true);
 
-      } catch (fallbackError) {
-        console.error('❌ Fallback submission failed:', fallbackError);
-        toast({
-          title: 'Error',
-          description: 'Failed to submit appointment. Please try again.',
-          variant: 'destructive',
-        });
-      }
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+            console.log('Starting registration process...');
+            console.log('Email to check:', formData.email);
 
-  // Helper functions
-  const formatEventType = (eventType: string): string => {
-    return eventTypeMap[eventType] || eventType;
-  };
+            // Check if email already exists (with timeout)
+            const emailCheckPromise = checkEmailExists(formData.email);
+            const timeoutPromise = new Promise<boolean>((_, reject) => 
+                setTimeout(() => reject(new Error('Email check timeout')), 5000)
+            );
 
-  // Get status badge color
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'confirmed':
-        return <Badge className="bg-green-100 text-green-800">Confirmed</Badge>;
-      case 'cancelled':
-        return <Badge variant="destructive">Cancelled</Badge>;
-      default:
-        return <Badge variant="secondary">Pending</Badge>;
-    }
-  };
+            let emailExists = false;
+            try {
+                emailExists = await Promise.race([emailCheckPromise, timeoutPromise]);
+            } catch (timeoutError) {
+                console.warn('Email check timed out or failed, proceeding with registration');
+                emailExists = false; // Proceed if check fails/times out
+            }
+            
+            if (emailExists) {
+                setError('This email is already registered. Please use a different email or sign in.');
+                setCheckingEmail(false);
+                setSubmitted(false);
+                return;
+            }
 
-  // Render requirements for selected event type
-  const renderRequirements = () => {
-    if (!eventType || !serviceRequirements[eventType as keyof typeof serviceRequirements]) {
-      return null;
-    }
+            console.log('Email available, creating user...');
+            setCheckingEmail(false);
 
-    const requirements = serviceRequirements[eventType as keyof typeof serviceRequirements];
-    const IconComponent = requirements.icon;
+            // Create Firebase user
+            const user = await createFirebaseUser();
+            
+            console.log('User created, sending verification email...');
+            
+            // Send verification email
+            await sendFirebaseVerificationEmail(user);
+            
+            console.log('Moving to verification step...');
+            
+            // Move to verification step
+            setRegistrationStep('verification');
 
-    return (
-      <Card className="border-blue-200 bg-blue-50/50">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <IconComponent className="h-5 w-5 text-blue-600" />
-            {requirements.title}
-          </CardTitle>
-          <CardDescription>
-            Please prepare these documents and requirements
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ul className="space-y-2 text-sm">
-            {requirements.items.map((item, index) => (
-              <li key={index} className="flex items-start gap-2">
-                <Badge variant="outline" className="h-5 w-5 p-0 flex items-center justify-center text-xs mt-0.5 flex-shrink-0">
-                  {index + 1}
-                </Badge>
-                <span className="text-muted-foreground">{item}</span>
-              </li>
-            ))}
-          </ul>
-        </CardContent>
-      </Card>
+        } catch (err: any) {
+            console.error('Registration error:', err);
+            setError(err.message || 'Registration failed. Please try again.');
+        } finally {
+            setCheckingEmail(false);
+            setSubmitted(false);
+        }
+    };
+
+    const PasswordRequirement = ({ met, text }: { met: boolean; text: string }) => (
+        <div className={`flex items-center gap-2 text-sm ${met ? 'text-green-600' : 'text-gray-500'}`}>
+            {met ? <Check className="w-4 h-4" /> : <X className="w-4 h-4" />}
+            <span>{text}</span>
+        </div>
     );
-  };
-
-  // Render user appointments - PRIVATE na!
-  const renderUserAppointments = () => {
-    if (userAppointments.length === 0) {
-      return (
-        <Card className="mt-8">
-          <CardHeader>
-            <CardTitle className="text-xl flex items-center gap-2">
-              <CalendarIcon className="h-5 w-5" />
-              Your Appointments
-            </CardTitle>
-            <CardDescription>
-              You don't have any appointments yet. Book your first appointment above!
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      );
-    }
 
     return (
-      <Card className="mt-8">
-        <CardHeader>
-          <CardTitle className="text-xl flex items-center gap-2">
-            <CalendarIcon className="h-5 w-5" />
-            Your Appointments ({userAppointments.length})
-          </CardTitle>
-          <CardDescription>
-            Here are your scheduled appointments. These are private and only visible to you.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            {userAppointments.map((appointment) => {
-              const eventDate = parseEventDate(appointment.eventDate);
-              const createdAt = parseEventDate(appointment.createdAt);
-              
-              return (
-                <Card key={appointment.id} className="border-l-4 border-l-primary">
-                  <CardContent className="p-4">
-                    <div className="flex flex-col gap-3">
-                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold text-lg">
-                            {formatEventType(appointment.eventType)}
-                          </h3>
-                          {getStatusBadge(appointment.status)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Submitted: {createdAt ? safeFormatDate(createdAt, 'MMM dd, yyyy • h:mm a') : 'Invalid date'}
-                        </div>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-                        <div className="flex items-center gap-2">
-                          <CalendarIcon className="h-4 w-4 text-primary" />
-                          <div>
-                            <div className="font-medium">Date</div>
-                            <div className="text-muted-foreground">
-                              {eventDate ? safeFormatDate(eventDate, 'PPP') : 'Invalid date'}
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+            <Card className="w-full max-w-2xl shadow-xl">
+                <CardHeader className="bg-gradient-to-r from-primary to-primary/90 p-8 rounded-t-lg text-primary-foreground">
+                    <div className="flex items-center gap-3 mb-3">
+                        <Church className="w-8 h-8" />
+                        <h1 className="text-3xl font-bold">Holy Event</h1>
+                    </div>
+                    <p className="text-lg opacity-90">Join Our Community</p>
+                </CardHeader>
+
+                <CardContent className="p-8">
+                    {registrationStep === 'verification' ? (
+                        <div className="text-center space-y-6 py-4">
+                            <div className="flex justify-center">
+                                <div className="rounded-full bg-blue-100 p-4">
+                                    <MailCheck className="w-12 h-12 text-blue-600" />
+                                </div>
                             </div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Clock className="h-4 w-4 text-primary" />
-                          <div>
-                            <div className="font-medium">Time</div>
-                            <div className="text-muted-foreground">{safeFormatTime(appointment.eventTime)}</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Users className="h-4 w-4 text-primary" />
-                          <div>
-                            <div className="font-medium">Guests</div>
-                            <div className="text-muted-foreground">{appointment.guestCount} people</div>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Church className="h-4 w-4 text-primary" />
-                          <div>
-                            <div className="font-medium">Name</div>
-                            <div className="text-muted-foreground">{appointment.fullName}</div>
-                          </div>
-                        </div>
-                      </div>
+                            
+                            <div className="space-y-3">
+                                <h2 className="text-2xl font-bold text-blue-800">
+                                    Verify Your Email
+                                </h2>
+                                <p className="text-muted-foreground">
+                                    We sent a verification email to:
+                                </p>
+                                <p className="font-semibold text-lg break-all bg-blue-50 p-3 rounded border">
+                                    {formData.email}
+                                </p>
+                                <p className="text-sm text-gray-600">
+                                    Please check your email and click the verification link to activate your account.
+                                </p>
+                                <p className="text-sm text-red-600 font-medium">
+                                    Check your spam folder if you don't see the email!
+                                </p>
+                            </div>
 
-                      {appointment.message && (
-                        <div className="bg-muted/50 p-3 rounded-lg">
-                          <div className="text-sm font-medium mb-1">Additional Notes:</div>
-                          <div className="text-sm text-muted-foreground">"{appointment.message}"</div>
-                        </div>
-                      )}
+                            {error && (
+                                <div className={`p-3 border rounded text-sm ${
+                                    error.includes('✅') 
+                                        ? 'bg-green-100 border-green-300 text-green-700' 
+                                        : 'bg-red-100 border-red-300 text-red-700'
+                                }`}>
+                                    {error}
+                                </div>
+                            )}
 
-                      {appointment.firebaseId && (
-                        <div className="text-xs text-muted-foreground flex items-center gap-1">
-                          <CheckCircle className="h-3 w-3 text-green-500" />
-                          Synced with server • ID: {appointment.firebaseId.substring(0, 8)}...
+                            <div className="space-y-4">
+                                <div className="space-y-3">
+                                    <Button 
+                                        onClick={() => router.push('/login')}
+                                        className="w-full bg-blue-600 hover:bg-blue-700"
+                                    >
+                                        Go to Login Page
+                                    </Button>
+
+                                    <Button 
+                                        onClick={() => router.push('/')}
+                                        variant="outline"
+                                        className="w-full"
+                                    >
+                                        <Home className="mr-2 h-4 w-4" />
+                                        Back to Website
+                                    </Button>
+                                </div>
+                            </div>
                         </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-          
-          {/* Clear appointments button (for testing) */}
-          <div className="mt-6 pt-4 border-t">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={clearUserAppointments}
-              className="text-destructive hover:text-destructive"
-            >
-              Clear All My Appointments
-            </Button>
-            <p className="text-xs text-muted-foreground mt-2">
-              This will remove all your appointments from this device only.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+                    ) : (
+                        <form onSubmit={handleSubmit} className="space-y-6">
+                            <div className="text-center mb-2">
+                                <h2 className="text-2xl font-bold text-gray-900">Create Your Account</h2>
+                                <p className="text-gray-600">Join our parish community today</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label htmlFor="fullName" className="block text-sm font-medium text-gray-700">
+                                        Full Name *
+                                    </label>
+                                    <Input
+                                        id="fullName"
+                                        type="text"
+                                        placeholder="John Doe"
+                                        value={formData.fullName}
+                                        onChange={(e) => handleChange('fullName', e.target.value)}
+                                        required
+                                    />
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+                                        Email Address *
+                                    </label>
+                                    <Input
+                                        id="email"
+                                        type="email"
+                                        placeholder="john@example.com"
+                                        value={formData.email}
+                                        onChange={(e) => handleChange('email', e.target.value)}
+                                        required
+                                        disabled={checkingEmail}
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label htmlFor="phoneNumber" className="block text-sm font-medium text-gray-700">
+                                        Phone Number *
+                                    </label>
+                                    <Input
+                                        id="phoneNumber"
+                                        type="tel"
+                                        placeholder="09123456789"
+                                        value={formData.phoneNumber}
+                                        onChange={handlePhoneChange}
+                                        required
+                                        maxLength={11}
+                                    />
+                                    <p className="text-xs text-gray-500">
+                                        11-digit Philippine number (09XXXXXXXXX)
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+                                        Password *
+                                    </label>
+                                    <div className="relative">
+                                        <Input
+                                            id="password"
+                                            type={showPassword ? "text" : "password"}
+                                            placeholder="••••••••"
+                                            value={formData.password}
+                                            onChange={(e) => handlePasswordChange(e.target.value)}
+                                            required
+                                            className="pr-10"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowPassword(!showPassword)}
+                                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                        >
+                                            {showPassword ? (
+                                                <EyeOff className="w-4 h-4" />
+                                            ) : (
+                                                <Eye className="w-4 h-4" />
+                                            )}
+                                        </button>
+                                    </div>
+                                    
+                                    {formData.password && (
+                                        <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                                            <p className="text-sm font-medium text-gray-700 mb-2">Password must contain:</p>
+                                            <div className="grid grid-cols-1 gap-1">
+                                                <PasswordRequirement 
+                                                    met={passwordValidation.hasMinLength} 
+                                                    text="At least 8 characters" 
+                                                />
+                                                <PasswordRequirement 
+                                                    met={passwordValidation.hasUpperCase} 
+                                                    text="One uppercase letter (A-Z)" 
+                                                />
+                                                <PasswordRequirement 
+                                                    met={passwordValidation.hasLowerCase} 
+                                                    text="One lowercase letter (a-z)" 
+                                                />
+                                                <PasswordRequirement 
+                                                    met={passwordValidation.hasNumber} 
+                                                    text="One number (0-9)" 
+                                                />
+                                                <PasswordRequirement 
+                                                    met={passwordValidation.hasSpecialChar} 
+                                                    text="One special character (!@#$%^&* etc.)" 
+                                                />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="space-y-2">
+                                <label htmlFor="address" className="block text-sm font-medium text-gray-700">
+                                    Complete Address *
+                                </label>
+                                <Input
+                                    id="address"
+                                    type="text"
+                                    placeholder="Street, Barangay, City, Province"
+                                    value={formData.address}
+                                    onChange={(e) => handleChange('address', e.target.value)}
+                                    required
+                                />
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <label htmlFor="birthdate" className="block text-sm font-medium text-gray-700">
+                                        Birthdate *
+                                    </label>
+                                    <div className="relative">
+                                        <Input
+                                            id="birthdate"
+                                            type="date"
+                                            value={formData.birthdate}
+                                            onChange={(e) => handleChange('birthdate', e.target.value)}
+                                            required
+                                            max={new Date().toISOString().split('T')[0]}
+                                        />
+                                        <Calendar className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4 pointer-events-none" />
+                                    </div>
+                                    <p className="text-xs text-gray-500">
+                                        Must be 13+ years old
+                                    </p>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label htmlFor="gender" className="block text-sm font-medium text-gray-700">
+                                        Gender *
+                                    </label>
+                                    <Select
+                                        value={formData.gender}
+                                        onValueChange={(v) => handleChange('gender', v)}
+                                        required
+                                    >
+                                        <SelectTrigger>
+                                            <SelectValue placeholder="Select gender" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="male">Male</SelectItem>
+                                            <SelectItem value="female">Female</SelectItem>
+                                            <SelectItem value="other">Other</SelectItem>
+                                            <SelectItem value="prefer-not-to-say">Prefer not to say</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+
+                            {error && (
+                                <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
+                                    {error}
+                                </div>
+                            )}
+
+                            <div className="space-y-3">
+                                <label className="flex items-start gap-2 cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={acceptedTerms}
+                                        onChange={(e) => setAcceptedTerms(e.target.checked)}
+                                        className="mt-1 rounded border-gray-300 text-primary focus:ring-primary"
+                                        required
+                                    />
+                                    <span className="text-sm text-gray-700">
+                                        I agree to the{' '}
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowTerms(true)}
+                                            className="font-medium underline text-primary hover:text-primary/80"
+                                        >
+                                            Terms and Conditions
+                                        </button>
+                                        {' '}and understand that I need to verify my email before my account is activated.
+                                    </span>
+                                </label>
+                            </div>
+
+                            <div className="pt-4">
+                                <Button 
+                                    type="submit" 
+                                    className="w-full bg-primary hover:bg-primary/90" 
+                                    disabled={submitted || checkingEmail || !isPasswordValid}
+                                    size="lg"
+                                >
+                                    {checkingEmail ? (
+                                        <>
+                                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                            Checking Availability...
+                                        </>
+                                    ) : submitted ? (
+                                        <>
+                                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                            Creating Account...
+                                        </>
+                                    ) : (
+                                        'Create Account'
+                                    )}
+                                </Button>
+                            </div>
+
+                            <p className="text-center text-sm text-gray-600">
+                                Already have an account?{' '}
+                                <a href="/login" className="font-semibold text-primary hover:underline">
+                                    Sign in here
+                                </a>
+                            </p>
+                        </form>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Terms and Conditions Modal */}
+            {showTerms && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <Card className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                        <div className="p-6 space-y-4">
+                            <h2 className="text-2xl font-bold">Terms and Conditions</h2>
+                            <div className="space-y-4 text-sm text-gray-700">
+                                <section>
+                                    <h3 className="font-semibold text-lg mb-2">1. Account Registration</h3>
+                                    <p>By creating an account, you agree to provide accurate and complete information. You must be at least 13 years old to register.</p>
+                                </section>
+
+                                <section>
+                                    <h3 className="font-semibold text-lg mb-2">2. Email Verification Required</h3>
+                                    <p>Your account will be activated only after you verify your email address using the link we send to your email.</p>
+                                </section>
+
+                                <section>
+                                    <h3 className="font-semibold text-lg mb-2">3. Password Security</h3>
+                                    <p>You are responsible for maintaining the confidentiality of your password.</p>
+                                </section>
+
+                                <section>
+                                    <h3 className="font-semibold text-lg mb-2">4. Data Privacy</h3>
+                                    <p>Your personal information will only be used for parish communications and event management.</p>
+                                </section>
+
+                                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mt-4">
+                                    <p className="text-yellow-800 font-semibold">By checking the agreement box, you acknowledge that you have read, understood, and agree to be bound by these Terms and Conditions.</p>
+                                </div>
+                            </div>
+
+                            <Button onClick={() => setShowTerms(false)} className="w-full mt-4">
+                                I Have Read and Understand the Terms
+                            </Button>
+                        </div>
+                    </Card>
+                </div>
+            )}
+        </div>
     );
-  };
+};
 
-  return (
-    <>
-      {/* HERO SECTION */}
-      <section className="bg-gradient-to-b from-primary/5 to-background py-16">
-        <div className="container mx-auto px-4 text-center">
-          <div className="flex justify-center mb-6">
-            <div className="p-4 bg-primary/10 rounded-full">
-              <CalendarIcon className="h-12 w-12 text-primary" />
-            </div>
-          </div>
-          <h1 className="text-4xl md:text-5xl font-bold mb-4">
-            Church Events & Appointments
-          </h1>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Book your sacrament at church-approved times only. Your appointments are private and secure.
-            {eventType === 'baptism' && ' Baptism is available every Sunday.'}
-          </p>
-          {(currentUserInfo?.email || autoFilledEmail) && (
-            <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3 inline-block">
-              <p className="text-green-700 text-sm">
-                ✅ Welcome back! Your email has been auto-filled.
-                {autoFilledEmail && ` Detected: ${autoFilledEmail}`}
-              </p>
-            </div>
-          )}
-        </div>
-      </section>
-
-      <div className="container mx-auto px-4 py-12">
-        {/* SUCCESS MESSAGE */}
-        {showSuccess && successData && (
-          <div className="fixed top-4 right-4 left-4 md:left-auto md:max-w-md z-50 animate-in slide-in-from-top duration-500">
-            <Card className="bg-green-50 border-green-200 shadow-lg">
-              <CardContent className="p-6">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0">
-                    <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                      <CheckCircle className="w-6 h-6 text-green-600" />
-                    </div>
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-bold text-lg text-green-900 mb-2">
-                      ✅ Appointment Request Sent!
-                    </h3>
-                    <div className="space-y-2 text-sm text-green-800">
-                      <p><strong>Name:</strong> {successData.name}</p>
-                      <p><strong>Event:</strong> {formatEventType(successData.eventType)}</p>
-                      <p><strong>Date:</strong> {successData.date}</p>
-                      <p><strong>Time:</strong> {successData.time}</p>
-                    </div>
-                    <p className="text-xs text-green-600 mt-3">
-                      We will contact you within 24 hours to confirm your appointment.
-                    </p>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-green-600 hover:text-green-700 hover:bg-green-100"
-                    onClick={() => setShowSuccess(false)}
-                  >
-                    <XCircle className="w-4 h-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
-        <div className="grid lg:grid-cols-4 gap-8">
-          {/* BOOKING FORM */}
-          <div className="lg:col-span-2">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-2xl">Book Your Appointment</CardTitle>
-                <CardDescription>
-                  Select event, date, and approved time slot.
-                  <span className="font-bold block mt-1">
-                    Note: After setting an appointment, complete all the required documents and submit them to the
-                    church at least one (1) month before the chosen date of the service.
-                  </span>
-                  {eventType === 'baptism' && ' Baptism is available every Sunday only.'}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-
-                  {/* EVENT TYPE */}
-                  <div className="space-y-2">
-                    <Label>Event Type *</Label>
-                    <Select
-                      value={eventType}
-                      onValueChange={(v) => {
-                        setValue('eventType', v);
-                        setValue('eventTime', '');
-                        trigger('eventType');
-                      }}
-                      disabled={isSubmitting}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select event type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="mass">Holy Mass (Special Intention)</SelectItem>
-                        <SelectItem value="wedding">Wedding</SelectItem>
-                        <SelectItem value="baptism">Baptism (Every Sunday)</SelectItem>
-                        <SelectItem value="funeral">Funeral Mass</SelectItem>
-                        <SelectItem value="confirmation">Confirmation (Once a year)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {errors.eventType && (
-                      <p className="text-sm text-destructive">{errors.eventType.message}</p>
-                    )}
-                    {eventType === 'baptism' && (
-                      <p className="text-sm text-blue-600 bg-blue-50 p-2 rounded">
-                        Baptism is available every Sunday at 7:00 AM and 3:00 PM
-                      </p>
-                    )}
-                    {eventType === 'confirmation' && (
-                      <p className="text-sm text-orange-600 bg-orange-50 p-2 rounded">
-                         Confirmation is scheduled once a year as a school event
-                      </p>
-                    )}
-                  </div>
-
-                  {/* NAME & PHONE */}
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Full Name *</Label>
-                      <Input 
-                        {...register('fullName')} 
-                        placeholder="Juan Dela Cruz" 
-                        disabled={isSubmitting} 
-                      />
-                      {errors.fullName && (
-                        <p className="text-sm text-destructive">{errors.fullName.message}</p>
-                      )}
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Phone Number *</Label>
-                      <Input 
-                        {...register('phone')} 
-                        placeholder="09123456789" 
-                        disabled={isSubmitting}
-                        onChange={handlePhoneChange}
-                        maxLength={11}
-                      />
-                      {errors.phone ? (
-                        <p className="text-sm text-destructive">{errors.phone.message}</p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">
-                          Format: 09XXXXXXXXX (11 digits)
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* EMAIL - AUTO-FILLED */}
-                  <div className="space-y-2">
-                    <Label>Email *</Label>
-                    <Input 
-                      {...register('email')} 
-                      type="email" 
-                      placeholder="juan@example.com" 
-                      disabled={isSubmitting || !!currentUserInfo?.email || !!autoFilledEmail} 
-                      className={(currentUserInfo?.email || autoFilledEmail) ? "bg-muted" : ""}
-                    />
-                    {(currentUserInfo?.email || autoFilledEmail) && (
-                      <p className="text-xs text-green-600">
-                        ✅ Email auto-filled from your account
-                      </p>
-                    )}
-                    {errors.email && (
-                      <p className="text-sm text-destructive">{errors.email.message}</p>
-                    )}
-                  </div>
-
-                  {/* DATE PICKER */}
-                  <div className="space-y-2">
-                    <Label>Preferred Date *</Label>
-                    {eventType === 'baptism' && (
-                      <p className="text-sm text-blue-600">
-                        📅 Only Sundays are available for baptism
-                      </p>
-                    )}
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className={cn(
-                            'w-full justify-start text-left font-normal',
-                            !date && 'text-muted-foreground'
-                          )}
-                          disabled={isSubmitting || !eventType}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {date ? safeFormatDate(date, 'PPP') : 'Pick a date'}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0">
-                        <Calendar
-                          mode="single"
-                          selected={date}
-                          onSelect={(d) => {
-                            setDate(d || undefined);
-                            if (d) setValue('eventDate', d);
-                            trigger('eventDate');
-                          }}
-                          disabled={isDateDisabled}
-                          initialFocus
-                        />
-                      </PopoverContent>
-                    </Popover>
-                    {errors.eventDate && (
-                      <p className="text-sm text-destructive">{errors.eventDate.message}</p>
-                    )}
-                  </div>
-
-                  {/* TIME PICKER */}
-                  {eventType && date && (
-                    <div className="space-y-2">
-                      <Label className="flex items-center gap-2">
-                        <Clock className="w-4 h-4" />
-                        Available Times *
-                        <span className="text-xs text-muted-foreground">
-                          (1 hour service limit)
-                        </span>
-                      </Label>
-                      <Select
-                        value={eventTime}
-                        onValueChange={(v) => {
-                          setValue('eventTime', v);
-                          trigger('eventTime');
-                        }}
-                        disabled={isSubmitting}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a time" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {allowedTimes[eventType]?.map((t) => (
-                            <SelectItem key={t} value={t}>
-                              {safeFormatTime(t)} (1 hour)
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {errors.eventTime && (
-                        <p className="text-sm text-destructive">{errors.eventTime.message}</p>
-                      )}
-                    </div>
-                  )}
-
-                  {/* GUESTS */}
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Number of Capacity *</Label>
-                      <span className={`text-xs ${parseInt(guestCount || '0') > 1000 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                        {guestCount || '0'}/1000
-                      </span>
-                    </div>
-                    <Input 
-                      {...register('guestCount')} 
-                      type="number" 
-                      min="1" 
-                      max="1000"
-                      placeholder="50" 
-                      disabled={isSubmitting}
-                      onChange={handleGuestCountChange}
-                    />
-                    {errors.guestCount ? (
-                      <p className="text-sm text-destructive">{errors.guestCount.message}</p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground">
-                        Maximum 1000 guests allowed
-                      </p>
-                    )}
-                  </div>
-
-                  {/* MESSAGE */}
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Additional Notes (Optional)</Label>
-                      <span className={`text-xs ${notesCount > 50 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                        {notesCount}/50
-                      </span>
-                    </div>
-                    <Textarea
-                      {...register('message')}
-                      placeholder="e.g. Godparents, special intention, specific requests..."
-                      rows={4}
-                      disabled={isSubmitting}
-                      maxLength={50}
-                    />
-                    {errors.message && (
-                      <p className="text-sm text-destructive">{errors.message.message}</p>
-                    )}
-                    <p className="text-xs text-muted-foreground">
-                      Maximum 50 characters
-                    </p>
-                  </div>
-
-                  {/* SUBMIT BUTTON */}
-                  <Button
-                    type="submit"
-                    size="lg"
-                    className="w-full"
-                    disabled={isSubmitting || !eventType || !date || !eventTime}
-                  >
-                    {isSubmitting ? (
-                      <>
-                        <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
-                        Submitting...
-                      </>
-                    ) : (
-                      <>
-                        <Church className="mr-2 h-5 w-5" />
-                        Submit Appointment Request
-                      </>
-                    )}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-
-            {/* USER APPOINTMENTS SECTION - NOW AT THE BOTTOM */}
-            {renderUserAppointments()}
-          </div>
-
-          {/* RIGHT SIDEBAR */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* SERVICE REQUIREMENTS */}
-            {renderRequirements()}
-
-            {/* CONTACT & SCHEDULE INFO */}
-            <div className="grid md:grid-cols-2 gap-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Phone className="h-5 w-5 text-primary" />
-                    Contact Parish Office
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <p className="flex items-center gap-2">
-                    <Phone className="h-4 w-4 text-primary" /> 
-                    +63 2 8123 4567
-                  </p>
-                  <p className="flex items-center gap-2">
-                    <Mail className="h-4 w-4 text-primary" /> 
-                    parish@staugustine.ph
-                  </p>
-                  <p className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-primary" /> 
-                    Mon–Fri: 9AM–5PM
-                  </p>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-muted/50">
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <Clock className="h-5 w-5 text-primary" />
-                    Church Schedule
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <ul className="text-sm space-y-2 text-muted-foreground">
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span><strong>Baptism:</strong> Every Sunday at 7:00 AM, 3:00 PM</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span><strong>Wedding:</strong> 10:00 AM, 2:00 PM, 4:00 PM</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span><strong>Mass:</strong> 6:00 AM, 7:30 AM, 5:00 PM</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span><strong>Funeral:</strong> 9:00 AM, 1:00 PM</span>
-                    </li>
-                    <li className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span><strong>Confirmation:</strong> Once a year (School Event)</span>
-                    </li>
-                  </ul>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Service Information */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Service Information</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3 text-sm">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Service Duration:</span>
-                    <span className="font-semibold">1 hour maximum</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Booking Lead Time:</span>
-                    <span className="font-semibold">24 hours minimum</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Maximum Guests:</span>
-                    <span className="font-semibold text-primary">1000 people</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Confirmation:</span>
-                    <span className="font-semibold text-primary">Within 24 hours</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
+export default RegisterPage;

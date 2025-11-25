@@ -111,7 +111,7 @@ interface AppointmentData {
   status: string;
   createdAt: FieldValue;
   updatedAt: FieldValue;
-  userId?: string; // Para ma-identify kung sino ang may-ari
+  userId?: string;
 }
 
 interface UserAppointment {
@@ -127,7 +127,7 @@ interface UserAppointment {
   status: string;
   createdAt: string;
   firebaseId?: string;
-  userId?: string; // Para ma-identify kung sino ang may-ari
+  userId?: string;
 }
 
 // ==================== ALLOWED TIMES ====================
@@ -291,7 +291,6 @@ const parseEventDate = (dateString: string): Date | null => {
 
 // ==================== USER ID MANAGEMENT ====================
 const getUserId = (): string => {
-  // Gumamit ng localStorage para sa user identification
   let userId = localStorage.getItem('church_appointment_userId');
   if (!userId) {
     userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
@@ -308,6 +307,143 @@ const setUserEmail = (email: string) => {
   localStorage.setItem('church_appointment_userEmail', email);
 };
 
+// ==================== GET USER INFO FROM AUTH ====================
+const getCurrentUserInfo = (): {email?: string; fullName?: string; phone?: string} | null => {
+  if (typeof window === 'undefined') return null;
+  
+  try {
+    // Check if user is logged in via Firebase Auth or localStorage
+    const userEmail = localStorage.getItem('church_appointment_userEmail');
+    const userFullName = localStorage.getItem('church_appointment_userFullName');
+    const userPhone = localStorage.getItem('church_appointment_userPhone');
+    
+    // Alternative: Check for common auth patterns
+    const firebaseUser = localStorage.getItem('firebase:authUser:YOUR_FIREBASE_API_KEY:[DEFAULT]');
+    const authUser = localStorage.getItem('authUser');
+    const userData = localStorage.getItem('user');
+    
+    const userInfo: {email?: string; fullName?: string; phone?: string} = {};
+    
+    // Priority 1: Church appointment specific storage
+    if (userEmail) userInfo.email = userEmail;
+    if (userFullName) userInfo.fullName = userFullName;
+    if (userPhone) userInfo.phone = userPhone;
+    
+    // Priority 2: Firebase Auth
+    if (firebaseUser && !userInfo.email) {
+      try {
+        const firebaseData = JSON.parse(firebaseUser);
+        if (firebaseData.email) {
+          userInfo.email = firebaseData.email;
+          if (firebaseData.displayName && !userInfo.fullName) {
+            userInfo.fullName = firebaseData.displayName;
+          }
+        }
+      } catch (e) {
+        console.log('Firebase auth parsing failed');
+      }
+    }
+    
+    // Priority 3: Generic auth storage
+    if (authUser && !userInfo.email) {
+      try {
+        const authData = JSON.parse(authUser);
+        if (authData.email) userInfo.email = authData.email;
+        if (authData.name && !userInfo.fullName) userInfo.fullName = authData.name;
+        if (authData.phone && !userInfo.phone) userInfo.phone = authData.phone;
+      } catch (e) {
+        console.log('Auth user parsing failed');
+      }
+    }
+    
+    // Priority 4: Generic user storage
+    if (userData && !userInfo.email) {
+      try {
+        const userDataObj = JSON.parse(userData);
+        if (userDataObj.email) userInfo.email = userDataObj.email;
+        if (userDataObj.name && !userInfo.fullName) userInfo.fullName = userDataObj.name;
+        if (userDataObj.phone && !userInfo.phone) userInfo.phone = userDataObj.phone;
+      } catch (e) {
+        console.log('User data parsing failed');
+      }
+    }
+    
+    return Object.keys(userInfo).length > 0 ? userInfo : null;
+  } catch (error) {
+    console.error('Error getting user info:', error);
+    return null;
+  }
+};
+
+// ==================== AUTO-EMAIL DETECTION ====================
+const detectUserEmail = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  
+  try {
+    // Check multiple possible sources for user email
+    const sources = [
+      // Church appointment specific
+      localStorage.getItem('church_appointment_userEmail'),
+      
+      // Firebase Auth
+      (() => {
+        try {
+          const firebaseUser = localStorage.getItem('firebase:authUser:YOUR_FIREBASE_API_KEY:[DEFAULT]');
+          if (firebaseUser) {
+            const data = JSON.parse(firebaseUser);
+            return data.email;
+          }
+        } catch (e) {
+          return null;
+        }
+      })(),
+      
+      // Generic auth
+      (() => {
+        try {
+          const authUser = localStorage.getItem('authUser');
+          if (authUser) {
+            const data = JSON.parse(authUser);
+            return data.email;
+          }
+        } catch (e) {
+          return null;
+        }
+      })(),
+      
+      // Generic user data
+      (() => {
+        try {
+          const userData = localStorage.getItem('user');
+          if (userData) {
+            const data = JSON.parse(userData);
+            return data.email;
+          }
+        } catch (e) {
+          return null;
+        }
+      })(),
+      
+      // Session storage alternatives
+      sessionStorage.getItem('userEmail'),
+      localStorage.getItem('userEmail'),
+    ];
+    
+    // Return the first valid email found
+    for (const email of sources) {
+      if (email && typeof email === 'string' && email.includes('@') && email.includes('.')) {
+        console.log('📧 Auto-detected user email:', email);
+        return email;
+      }
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Error detecting user email:', error);
+    return null;
+  }
+};
+
 // ==================== MAIN COMPONENT ====================
 export default function EventAppointmentPage() {
   const { toast } = useToast();
@@ -318,6 +454,8 @@ export default function EventAppointmentPage() {
   const [notesCount, setNotesCount] = useState(0);
   const [userAppointments, setUserAppointments] = useState<UserAppointment[]>([]);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  const [currentUserInfo, setCurrentUserInfo] = useState<{email?: string; fullName?: string; phone?: string} | null>(null);
+  const [autoFilledEmail, setAutoFilledEmail] = useState<string | null>(null);
 
   const {
     register,
@@ -347,11 +485,51 @@ export default function EventAppointmentPage() {
     setNotesCount(message?.length || 0);
   }, [message]);
 
-  // Load user appointments from localStorage on component mount
+  // Load user info and appointments on component mount
   useEffect(() => {
+    loadUserInfo();
     loadUserAppointments();
-    setCurrentUserEmail(getUserEmail());
   }, []);
+
+  // Auto-detect and fill user email on component mount
+  useEffect(() => {
+    const detectedEmail = detectUserEmail();
+    if (detectedEmail) {
+      setAutoFilledEmail(detectedEmail);
+      setValue('email', detectedEmail, { shouldValidate: true });
+      
+      toast({
+        title: 'Email Auto-filled!',
+        description: `We detected your email: ${detectedEmail}`,
+        variant: 'default',
+      });
+    }
+  }, [setValue, toast]);
+
+  // Load user information from localStorage/auth
+  const loadUserInfo = () => {
+    const userInfo = getCurrentUserInfo();
+    setCurrentUserInfo(userInfo);
+    
+    if (userInfo?.email) {
+      setCurrentUserEmail(userInfo.email);
+      setValue('email', userInfo.email);
+      
+      // Auto-fill other fields if available
+      if (userInfo.fullName) {
+        setValue('fullName', userInfo.fullName);
+      }
+      if (userInfo.phone) {
+        setValue('phone', userInfo.phone);
+      }
+      
+      toast({
+        title: 'Welcome Back!',
+        description: 'Your information has been auto-filled.',
+        variant: 'default',
+      });
+    }
+  };
 
   // Auto-clear time when event type changes
   useEffect(() => {
@@ -479,6 +657,14 @@ export default function EventAppointmentPage() {
       setUserEmail(userEmail);
       setCurrentUserEmail(userEmail);
 
+      // Also save name and phone for future auto-fill
+      if (data.fullName) {
+        localStorage.setItem('church_appointment_userFullName', data.fullName.trim());
+      }
+      if (data.phone) {
+        localStorage.setItem('church_appointment_userPhone', data.phone.trim());
+      }
+
       // Prepare data for Firestore
       const appointmentData: AppointmentData = {
         fullName: data.fullName.trim(),
@@ -491,7 +677,7 @@ export default function EventAppointmentPage() {
         status: 'pending',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        userId: userId, // Idinagdag ang user ID para sa privacy
+        userId: userId,
       };
 
       // Add message only if it exists and trim to 50 characters
@@ -519,7 +705,7 @@ export default function EventAppointmentPage() {
         status: 'pending',
         createdAt: new Date().toISOString(),
         firebaseId: docRef.id,
-        userId: userId, // Idinagdag ang user ID para sa privacy
+        userId: userId,
       };
 
       if (data.message && data.message.trim() !== '') {
@@ -544,8 +730,13 @@ export default function EventAppointmentPage() {
       // Show success message
       setShowSuccess(true);
 
-      // Reset form
-      reset();
+      // Reset form but keep email and user info
+      reset({
+        email: data.email,
+        fullName: data.fullName,
+        phone: data.phone,
+        guestCount: '1'
+      });
       setDate(undefined);
       setNotesCount(0);
 
@@ -572,6 +763,14 @@ export default function EventAppointmentPage() {
         setUserEmail(userEmail);
         setCurrentUserEmail(userEmail);
 
+        // Also save name and phone for future auto-fill
+        if (data.fullName) {
+          localStorage.setItem('church_appointment_userFullName', data.fullName.trim());
+        }
+        if (data.phone) {
+          localStorage.setItem('church_appointment_userPhone', data.phone.trim());
+        }
+
         const appointment: UserAppointment = {
           id: Date.now().toString(),
           fullName: data.fullName.trim(),
@@ -583,7 +782,7 @@ export default function EventAppointmentPage() {
           guestCount: data.guestCount,
           status: 'pending',
           createdAt: new Date().toISOString(),
-          userId: userId, // Idinagdag ang user ID para sa privacy
+          userId: userId,
         };
 
         if (data.message && data.message.trim() !== '') {
@@ -608,8 +807,13 @@ export default function EventAppointmentPage() {
         // Show success message
         setShowSuccess(true);
 
-        // Reset form
-        reset();
+        // Reset form but keep email and user info
+        reset({
+          email: data.email,
+          fullName: data.fullName,
+          phone: data.phone,
+          guestCount: '1'
+        });
         setDate(undefined);
         setNotesCount(0);
 
@@ -831,6 +1035,14 @@ export default function EventAppointmentPage() {
             Book your sacrament at church-approved times only. Your appointments are private and secure.
             {eventType === 'baptism' && ' Baptism is available every Sunday.'}
           </p>
+          {(currentUserInfo?.email || autoFilledEmail) && (
+            <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3 inline-block">
+              <p className="text-green-700 text-sm">
+                ✅ Welcome back! Your email has been auto-filled.
+                {autoFilledEmail && ` Detected: ${autoFilledEmail}`}
+              </p>
+            </div>
+          )}
         </div>
       </section>
 
@@ -962,15 +1174,21 @@ export default function EventAppointmentPage() {
                     </div>
                   </div>
 
-                  {/* EMAIL */}
+                  {/* EMAIL - AUTO-FILLED */}
                   <div className="space-y-2">
                     <Label>Email *</Label>
                     <Input 
                       {...register('email')} 
                       type="email" 
                       placeholder="juan@example.com" 
-                      disabled={isSubmitting} 
+                      disabled={isSubmitting || !!currentUserInfo?.email || !!autoFilledEmail} 
+                      className={(currentUserInfo?.email || autoFilledEmail) ? "bg-muted" : ""}
                     />
+                    {(currentUserInfo?.email || autoFilledEmail) && (
+                      <p className="text-xs text-green-600">
+                        ✅ Email auto-filled from your account
+                      </p>
+                    )}
                     {errors.email && (
                       <p className="text-sm text-destructive">{errors.email.message}</p>
                     )}
