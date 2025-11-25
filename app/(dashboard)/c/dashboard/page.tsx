@@ -575,7 +575,7 @@ export default function ClientDashboardPage() {
                 Parishioner Dashboard
               </h1>
               <p className="mt-2 text-primary-foreground/80">
-                Welcome back, {userData.name}! We're glad to have you with us.
+                Welcome back! We're glad to have you with us.
               </p>
             </div>
             <div className="flex items-center gap-4">
