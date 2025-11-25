@@ -11,12 +11,13 @@ import {
   MapPin,
   CheckCircle,
   XCircle,
-  CalendarDays
+  CalendarDays,
+  RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
 import { db } from '@/lib/firebase-config';
-import { collection, query, where, orderBy, onSnapshot, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, Timestamp, addDoc } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 interface Appointment {
@@ -32,6 +33,7 @@ interface Appointment {
   guestCount?: string;
   message?: string;
   userId?: string;
+  createdAt?: any;
 }
 
 interface ChurchEvent {
@@ -45,8 +47,9 @@ interface ChurchEvent {
   priest?: string;
   status: 'active' | 'cancelled';
   isPublic: boolean;
-  postedAt: string;
+  postedAt: any;
   createdAt?: any;
+  updatedAt?: any;
 }
 
 interface UserData {
@@ -85,22 +88,97 @@ const formatEventType = (eventType: string): string => {
   return eventTypeMap[eventType] || eventType;
 };
 
+// Helper to convert Firestore timestamp to ISO string
+const convertTimestampToISO = (timestamp: any): string => {
+  if (timestamp?.toDate) {
+    return timestamp.toDate().toISOString();
+  }
+  if (timestamp instanceof Date) {
+    return timestamp.toISOString();
+  }
+  if (typeof timestamp === 'string') {
+    return timestamp;
+  }
+  return new Date().toISOString();
+};
+
+// Function to add sample events to Firebase (for testing/initial setup)
+const addSampleEventsToFirebase = async () => {
+  try {
+    const sampleEvents = [
+      {
+        type: 'mass',
+        title: 'Sunday Holy Mass',
+        description: 'Regular Sunday mass with the parish community',
+        date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 2 days from now
+        time: '08:00',
+        location: 'Main Church',
+        priest: 'Fr. John Smith',
+        status: 'active',
+        isPublic: true,
+        postedAt: Timestamp.now(),
+        createdAt: Timestamp.now()
+      },
+      {
+        type: 'wedding',
+        title: 'Wedding Ceremony',
+        description: 'Wedding of Maria Santos and Juan Dela Cruz',
+        date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 5 days from now
+        time: '14:00',
+        location: 'Main Church',
+        priest: 'Fr. Michael Johnson',
+        status: 'active',
+        isPublic: true,
+        postedAt: Timestamp.now(),
+        createdAt: Timestamp.now()
+      },
+      {
+        type: 'baptism',
+        title: 'Infant Baptism',
+        description: 'Baptism ceremony for newborn children',
+        date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 7 days from now
+        time: '10:00',
+        location: 'Baptistry',
+        priest: 'Fr. John Smith',
+        status: 'active',
+        isPublic: true,
+        postedAt: Timestamp.now(),
+        createdAt: Timestamp.now()
+      }
+    ];
+
+    const eventsCollection = collection(db, 'events');
+    
+    for (const event of sampleEvents) {
+      await addDoc(eventsCollection, event);
+      console.log('✅ Added sample event:', event.title);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('❌ Error adding sample events:', error);
+    return false;
+  }
+};
+
 export default function ClientDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<ChurchEvent[]>([]);
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const { toast } = useToast();
   const router = useRouter();
 
+  // Real-time Firestore listeners
   useEffect(() => {
     const checkAuthentication = () => {
-      const userRole = localStorage.getItem('userRole');
-      const authToken = localStorage.getItem('authToken');
+      // Mas maluwag na authentication check para sa events
       const userId = getUserId();
+      const userEmail = getUserEmail();
       
-      if (!userRole || !authToken || !userId) {
+      if (!userId || !userEmail) {
         setIsAuthenticated(false);
         router.push('/login?redirect=' + encodeURIComponent('/c/dashboard'));
         return false;
@@ -114,7 +192,7 @@ export default function ClientDashboardPage() {
       return;
     }
 
-    const fetchDashboardData = async () => {
+    const initializeDashboard = async () => {
       try {
         setLoading(true);
         
@@ -140,14 +218,17 @@ export default function ClientDashboardPage() {
 
         setUserData(currentUser);
 
-        // REAL-TIME LISTENER FOR APPOINTMENTS FROM FIREBASE
+        console.log('🔄 Setting up real-time listeners...');
+
+        // REAL-TIME LISTENER FOR APPOINTMENTS (User-specific)
         const appointmentsQuery = query(
           collection(db, 'appointments'),
           where('userId', '==', userId),
           orderBy('createdAt', 'desc')
         );
 
-        const appointmentsUnsubscribe = onSnapshot(appointmentsQuery, 
+        const appointmentsUnsubscribe = onSnapshot(
+          appointmentsQuery, 
           (querySnapshot) => {
             const userAppointments: Appointment[] = [];
             querySnapshot.forEach((doc) => {
@@ -158,26 +239,28 @@ export default function ClientDashboardPage() {
                 eventDate: data.eventDate || '',
                 eventTime: data.eventTime || '',
                 status: data.status || 'pending',
-                submittedAt: data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString(),
+                submittedAt: convertTimestampToISO(data.createdAt),
                 email: data.email || '',
                 fullName: data.fullName || '',
                 phone: data.phone || '',
                 guestCount: data.guestCount || '',
                 message: data.message || '',
-                userId: data.userId || ''
+                userId: data.userId || '',
+                createdAt: data.createdAt
               };
               userAppointments.push(appointment);
             });
             
-            console.log('📊 Dashboard appointments loaded:', userAppointments.length);
+            console.log('📊 Real-time appointments update:', userAppointments.length);
             
             // Update localStorage with latest appointments
             localStorage.setItem('appointments', JSON.stringify(userAppointments));
             
             // Show only latest 3 appointments for dashboard
-            setAppointments(userAppointments.slice(0, 3));
+            const latestAppointments = userAppointments.slice(0, 3);
+            setAppointments(latestAppointments);
             
-            // Show toast when new appointments are approved
+            // Show toast for status changes
             userAppointments.forEach(apt => {
               if (apt.status === 'approved') {
                 const wasPending = appointments.find(oldApt => 
@@ -194,44 +277,47 @@ export default function ClientDashboardPage() {
             });
           },
           (error) => {
-            console.error('Firebase appointments error:', error);
-            // Fallback to localStorage
+            console.error('❌ Firestore appointments error:', error);
+            toast({
+              title: 'Connection Issue',
+              description: 'Using cached appointments data.',
+              variant: 'destructive',
+            });
             loadAppointmentsFromLocalStorage();
           }
         );
 
-        // LOAD CHURCH EVENTS FROM FIREBASE
-        const loadChurchEvents = async () => {
+        // REAL-TIME LISTENER FOR CHURCH EVENTS (Public - dapat makita ng lahat ng users)
+        const setupEventsListener = () => {
+          console.log('🎯 Setting up PUBLIC real-time events listener...');
+          
           try {
-            console.log('🔄 Loading church events from Firestore...');
+            // SIMPLIFIED QUERY: Kunin lang ang active at public events
+            const eventsQuery = query(
+              collection(db, 'events'),
+              where('status', '==', 'active'),
+              orderBy('date', 'asc')
+            );
             
-            // Try different collection names
-            const collectionNames = ['events', 'churchevents', 'church_events'];
-            let eventsFound = false;
-            
-            for (const collectionName of collectionNames) {
-              try {
-                const eventsQuery = query(
-                  collection(db, collectionName),
-                  where('status', '==', 'active'),
-                  orderBy('date', 'asc')
-                );
+            const eventsUnsubscribe = onSnapshot(
+              eventsQuery, 
+              (querySnapshot) => {
+                console.log('📡 Real-time PUBLIC events update:', querySnapshot.size, 'events');
                 
-                const querySnapshot = await getDocs(eventsQuery);
+                const churchEvents: ChurchEvent[] = [];
+                const now = new Date();
                 
-                if (!querySnapshot.empty) {
-                  console.log(`✅ Found events in collection: ${collectionName}`);
-                  const churchEvents: ChurchEvent[] = [];
+                querySnapshot.forEach((doc) => {
+                  const data = doc.data();
+                  const eventDate = data.date;
                   
-                  querySnapshot.forEach((doc) => {
-                    const data = doc.data();
-                    const eventDate = data.date;
+                  try {
+                    const eventDateObj = new Date(eventDate);
+                    const isFutureEvent = eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
                     
-                    // Check if event is public and in the future
-                    const isPublic = data.isPublic !== false; // Default to true if not specified
-                    const isFutureEvent = new Date(eventDate) >= new Date();
-                    
-                    if (isPublic && isFutureEvent) {
+                    // TANGGALIN ANG isPublic CHECK PARA MAKITA NG LAHAT
+                    // if (isFutureEvent && data.isPublic !== false) {
+                    if (isFutureEvent) {
                       churchEvents.push({
                         id: doc.id,
                         type: data.type || '',
@@ -242,61 +328,119 @@ export default function ClientDashboardPage() {
                         location: data.location || '',
                         priest: data.priest || '',
                         status: data.status || 'active',
-                        isPublic: data.isPublic || true,
-                        postedAt: data.postedAt?.toDate?.()?.toISOString() || data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString()
+                        isPublic: data.isPublic !== false,
+                        postedAt: data.postedAt,
+                        createdAt: data.createdAt,
+                        updatedAt: data.updatedAt
                       });
                     }
-                  });
-                  
-                  if (churchEvents.length > 0) {
-                    console.log(`🎯 Loaded ${churchEvents.length} events from ${collectionName}`);
-                    // Sort by date and get upcoming 3 events
-                    const sortedEvents = churchEvents
-                      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                      .slice(0, 3);
-                    
-                    setUpcomingEvents(sortedEvents);
-                    eventsFound = true;
-                    
-                    // Save to localStorage as backup
-                    localStorage.setItem('churchEvents', JSON.stringify(churchEvents));
-                    break;
+                  } catch (error) {
+                    console.error('Error processing event date:', error);
                   }
+                });
+                
+                if (churchEvents.length > 0) {
+                  console.log(`✅ Loaded ${churchEvents.length} PUBLIC events`);
+                  
+                  // Sort by date and get upcoming 3 events
+                  const sortedEvents = churchEvents
+                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+                    .slice(0, 3);
+                  
+                  setUpcomingEvents(sortedEvents);
+                  
+                  // Save to localStorage as backup
+                  localStorage.setItem('churchEvents', JSON.stringify(churchEvents.map(event => ({
+                    ...event,
+                    postedAt: convertTimestampToISO(event.postedAt),
+                    createdAt: convertTimestampToISO(event.createdAt),
+                    updatedAt: convertTimestampToISO(event.updatedAt)
+                  }))));
+                  
+                } else {
+                  console.log('📭 No upcoming PUBLIC events found');
+                  
+                  // Try to add sample events if no events exist
+                  const initializeSampleEvents = async () => {
+                    console.log('🆕 Initializing sample events...');
+                    const success = await addSampleEventsToFirebase();
+                    if (success) {
+                      toast({
+                        title: 'Sample Events Added',
+                        description: 'Sample church events have been added to the database.',
+                      });
+                    }
+                  };
+                  
+                  // Auto-create sample events if none exist
+                  initializeSampleEvents();
+                  loadEventsFromLocalStorage();
                 }
-              } catch (error) {
-                console.log(`❌ No events found in ${collectionName}:`, error);
-                continue;
+              },
+              (error) => {
+                console.error('❌ PUBLIC Events listener error:', error);
+                
+                // Try to create the events collection with sample data
+                if (error.code === 'failed-precondition' || error.code === 'not-found') {
+                  console.log('🆕 Events collection might not exist, attempting to create with sample data...');
+                  
+                  const createSampleEvents = async () => {
+                    const success = await addSampleEventsToFirebase();
+                    if (success) {
+                      toast({
+                        title: 'Events Collection Created',
+                        description: 'Sample events have been added to the database.',
+                      });
+                    } else {
+                      toast({
+                        title: 'Events Not Available',
+                        description: 'Please check if the events collection exists in Firebase.',
+                        variant: 'destructive',
+                      });
+                    }
+                  };
+                  
+                  createSampleEvents();
+                }
+                
+                loadEventsFromLocalStorage();
               }
-            }
+            );
             
-            if (!eventsFound) {
-              console.log('📱 No events found in Firestore, falling back to localStorage');
-              loadEventsFromLocalStorage();
-            }
+            return eventsUnsubscribe;
             
           } catch (error) {
-            console.error('❌ Error loading church events:', error);
+            console.error('❌ Cannot setup PUBLIC events listener:', error);
             loadEventsFromLocalStorage();
+            return () => {};
           }
         };
 
-        // Load church events
-        loadChurchEvents();
+        // Setup real-time events listener
+        const eventsUnsubscribe = setupEventsListener();
+
+        setLoading(false);
 
         return () => {
+          console.log('🧹 Cleaning up real-time listeners...');
           appointmentsUnsubscribe();
+          if (eventsUnsubscribe) eventsUnsubscribe();
         };
 
       } catch (error) {
-        console.error('Error fetching dashboard data:', error);
-        setAppointments([]);
+        console.error('❌ Error initializing dashboard:', error);
+        toast({
+          title: 'Initialization Error',
+          description: 'Loading cached data...',
+          variant: 'destructive',
+        });
+        loadAppointmentsFromLocalStorage();
         loadEventsFromLocalStorage();
-      } finally {
         setLoading(false);
       }
     };
 
-    fetchDashboardData();
+    initializeDashboard();
   }, [toast, router]);
 
   const loadAppointmentsFromLocalStorage = () => {
@@ -312,7 +456,7 @@ export default function ClientDashboardPage() {
           apt.userId === userId || apt.email === userEmail
         );
         
-        console.log('📱 LocalStorage appointments loaded:', userAppointments.length);
+        console.log('📱 Loaded appointments from localStorage:', userAppointments.length);
         setAppointments(userAppointments.slice(0, 3));
       } else {
         setAppointments([]);
@@ -329,50 +473,49 @@ export default function ClientDashboardPage() {
       if (storedEvents) {
         const allEvents: ChurchEvent[] = JSON.parse(storedEvents);
         const futureEvents = allEvents
-          .filter(event => new Date(event.date) >= new Date())
+          .filter(event => {
+            try {
+              return new Date(event.date) >= new Date();
+            } catch {
+              return false;
+            }
+          })
+          .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
           .slice(0, 3);
+        
         setUpcomingEvents(futureEvents);
+        console.log('📱 Loaded events from localStorage:', futureEvents.length);
       } else {
-        setUpcomingEvents(getMockEvents());
+        console.log('📱 No events in localStorage, using sample events');
+        // Create sample events for display
+        const sampleEvents: ChurchEvent[] = [
+          {
+            id: '1',
+            type: 'mass',
+            title: 'Sunday Holy Mass',
+            description: 'Regular Sunday mass with the parish community',
+            date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+            time: '08:00',
+            location: 'Main Church',
+            priest: 'Fr. John Smith',
+            status: 'active',
+            isPublic: true,
+            postedAt: new Date().toISOString()
+          }
+        ];
+        setUpcomingEvents(sampleEvents);
       }
     } catch (error) {
       console.error('Error loading events from localStorage:', error);
-      setUpcomingEvents(getMockEvents());
+      setUpcomingEvents([]);
     }
   };
 
-  const getMockEvents = (): ChurchEvent[] => [
-    {
-      id: '1',
-      type: 'mass',
-      title: 'Sunday Mass',
-      description: 'Regular Sunday celebration',
-      date: new Date(Date.now() + 86400000).toISOString().split('T')[0], // Tomorrow
-      time: '09:00',
-      location: 'Main Sanctuary',
-      status: 'active',
-      isPublic: true,
-      postedAt: new Date().toISOString()
-    },
-    {
-      id: '2',
-      type: 'confession',
-      title: 'Confession Schedule',
-      description: 'Sacrament of Reconciliation',
-      date: new Date(Date.now() + 172800000).toISOString().split('T')[0], // Day after tomorrow
-      time: '14:00',
-      location: 'Confession Room',
-      status: 'active',
-      isPublic: true,
-      postedAt: new Date().toISOString()
-    }
-  ];
-
   const getStatusBadge = (status: string) => {
     const variants = {
-      approved: 'secondary',
+      approved: 'default',
       rejected: 'destructive',
-      pending: 'default'
+      pending: 'secondary'
     } as const;
 
     return (
@@ -395,6 +538,18 @@ export default function ClientDashboardPage() {
     }
   };
 
+  const formatTime = (timeString: string) => {
+    try {
+      const [hours, minutes] = timeString.split(':');
+      const hour = parseInt(hours);
+      const ampm = hour >= 12 ? 'PM' : 'AM';
+      const formattedHour = hour % 12 || 12;
+      return `${formattedHour}:${minutes} ${ampm}`;
+    } catch (error) {
+      return timeString;
+    }
+  };
+
   const getUpcomingAppointment = () => {
     const approvedAppointments = appointments.filter(apt => apt.status === 'approved');
     const upcoming = approvedAppointments
@@ -410,85 +565,38 @@ export default function ClientDashboardPage() {
     return upcoming;
   };
 
-  const upcomingAppointment = getUpcomingAppointment();
-
-  // Handle manual refresh of appointments and events
   const handleRefreshData = async () => {
-    setLoading(true);
+    setRefreshing(true);
     try {
-      // Reload church events from Firestore
-      const collectionNames = ['events', 'churchevents', 'church_events'];
+      // Clear current data
+      setAppointments([]);
+      setUpcomingEvents([]);
       
-      for (const collectionName of collectionNames) {
-        try {
-          const eventsQuery = query(
-            collection(db, collectionName),
-            where('status', '==', 'active'),
-            orderBy('date', 'asc')
-          );
-          
-          const querySnapshot = await getDocs(eventsQuery);
-          
-          if (!querySnapshot.empty) {
-            const churchEvents: ChurchEvent[] = [];
-            
-            querySnapshot.forEach((doc) => {
-              const data = doc.data();
-              const eventDate = data.date;
-              const isPublic = data.isPublic !== false;
-              const isFutureEvent = new Date(eventDate) >= new Date();
-              
-              if (isPublic && isFutureEvent) {
-                churchEvents.push({
-                  id: doc.id,
-                  type: data.type || '',
-                  title: data.title || '',
-                  description: data.description || '',
-                  date: eventDate,
-                  time: data.time || '',
-                  location: data.location || '',
-                  priest: data.priest || '',
-                  status: data.status || 'active',
-                  isPublic: data.isPublic || true,
-                  postedAt: data.postedAt?.toDate?.()?.toISOString() || data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString()
-                });
-              }
-            });
-            
-            if (churchEvents.length > 0) {
-              const sortedEvents = churchEvents
-                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                .slice(0, 3);
-              
-              setUpcomingEvents(sortedEvents);
-              localStorage.setItem('churchEvents', JSON.stringify(churchEvents));
-              
-              toast({
-                title: 'Data Refreshed',
-                description: `Loaded ${churchEvents.length} events from ${collectionName}`,
-              });
-              break;
-            }
-          }
-        } catch (error) {
-          continue;
-        }
-      }
-      
-      // Reload appointments from localStorage
+      // Reload from localStorage first for immediate response
       loadAppointmentsFromLocalStorage();
+      loadEventsFromLocalStorage();
+      
+      toast({
+        title: 'Refreshing Data',
+        description: 'Checking for latest updates...',
+      });
+      
+      // The real-time listeners will automatically update the data
+      // from Firestore when they reconnect
       
     } catch (error) {
       console.error('Error refreshing data:', error);
       toast({
         title: 'Refresh Failed',
-        description: 'Using cached data',
+        description: 'Please check your connection',
         variant: 'destructive',
       });
     } finally {
-      setLoading(false);
+      setTimeout(() => setRefreshing(false), 2000);
     }
   };
+
+  const upcomingAppointment = getUpcomingAppointment();
 
   if (!isAuthenticated) {
     return (
@@ -507,6 +615,7 @@ export default function ClientDashboardPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
           <p className="mt-4 text-muted-foreground">Loading your dashboard...</p>
+          <p className="text-sm text-muted-foreground mt-2">Setting up real-time updates</p>
         </div>
       </div>
     );
@@ -563,21 +672,15 @@ export default function ClientDashboardPage() {
               </CardTitle>
               <div className="flex items-center gap-2">
                 <Calendar className="w-5 h-5 text-primary" />
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  onClick={handleRefreshData}
-                  className="h-6 w-6 p-0"
-                  disabled={loading}
-                >
-                  🔄
-                </Button>
+                <Badge variant="secondary" className="text-xs">
+                  Live
+                </Badge>
               </div>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{appointments.length}</div>
               <p className="text-xs text-muted-foreground">
-                {appointments.filter(apt => apt.status === 'approved').length} approved
+                {appointments.filter(apt => apt.status === 'approved').length} approved • Real-time
               </p>
             </CardContent>
           </Card>
@@ -589,14 +692,14 @@ export default function ClientDashboardPage() {
               </CardTitle>
               <div className="flex items-center gap-2">
                 <CalendarDays className="w-5 h-5 text-blue-600" />
-                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                  Live
-                </span>
+                <Badge variant="secondary" className="text-xs">
+                  Public
+                </Badge>
               </div>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{upcomingEvents.length}</div>
-              <p className="text-xs text-muted-foreground">From parish calendar</p>
+              <p className="text-xs text-muted-foreground">Public events • All users can see</p>
             </CardContent>
           </Card>
         </div>
@@ -631,7 +734,7 @@ export default function ClientDashboardPage() {
                       </p>
                       <p className="flex items-center gap-2">
                         <Clock className="w-4 h-4 text-green-600" />
-                        <span>{upcomingAppointment.eventTime}</span>
+                        <span>{formatTime(upcomingAppointment.eventTime)}</span>
                       </p>
                       {upcomingAppointment.fullName && (
                         <p className="flex items-center gap-2">
@@ -651,8 +754,7 @@ export default function ClientDashboardPage() {
                 <div>
                   <CardTitle>Recent Appointments</CardTitle>
                   <CardDescription>
-                    Your recent sacrament requests • Real-time updates
-                    {appointments.length > 0 && ` • Showing ${appointments.length} of ${localStorage.getItem('appointments') ? JSON.parse(localStorage.getItem('appointments')!).length : 0} total`}
+                    Your recent sacrament requests • Updates in real-time
                   </CardDescription>
                 </div>
                 <div className="flex gap-2">
@@ -692,7 +794,7 @@ export default function ClientDashboardPage() {
                           <div>
                             <p className="font-medium">{formatEventType(appointment.eventType)}</p>
                             <p className="text-sm text-muted-foreground">
-                              {formatDate(appointment.eventDate)} • {appointment.eventTime}
+                              {formatDate(appointment.eventDate)} • {formatTime(appointment.eventTime)}
                             </p>
                             {appointment.fullName && (
                               <p className="text-xs text-muted-foreground">
@@ -714,11 +816,22 @@ export default function ClientDashboardPage() {
           <div className="space-y-8">
             {/* Upcoming Events */}
             <Card>
-              <CardHeader>
-                <CardTitle>Upcoming Church Events</CardTitle>
-                <CardDescription>
-                  Live events from the parish • {upcomingEvents.length} events found
-                </CardDescription>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle>Upcoming Church Events</CardTitle>
+                  <CardDescription>
+                    Public events for everyone • Updates automatically
+                  </CardDescription>
+                </div>
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  onClick={handleRefreshData}
+                  disabled={refreshing}
+                >
+                  <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                  {refreshing ? 'Refreshing...' : 'Refresh'}
+                </Button>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
@@ -726,23 +839,16 @@ export default function ClientDashboardPage() {
                     <div className="text-center py-8 text-muted-foreground">
                       <CalendarDays className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No upcoming events</p>
-                      <p className="text-sm mt-2">Check back later for new events</p>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={handleRefreshData}
-                        className="mt-2"
-                      >
-                        Refresh Events
-                      </Button>
+                      <p className="text-sm mt-2">New events will appear here automatically</p>
+                      <p className="text-xs mt-1">Public events for all users</p>
                     </div>
                   ) : (
                     upcomingEvents.map((event) => (
-                      <div key={event.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted/70 transition-colors cursor-pointer">
-                        <div>
+                      <div key={event.id} className="flex items-start justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted/70 transition-colors border">
+                        <div className="flex-1">
                           <p className="font-medium">{event.title}</p>
                           <p className="text-sm text-muted-foreground">
-                            {formatDate(event.date)} • {event.time}
+                            {formatDate(event.date)} • {formatTime(event.time)}
                           </p>
                           <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
                             <MapPin className="w-3 h-3" />
@@ -754,34 +860,23 @@ export default function ClientDashboardPage() {
                               {event.priest}
                             </p>
                           )}
+                          {event.description && (
+                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                              {event.description}
+                            </p>
+                          )}
                         </div>
-                        <Badge variant="outline">{formatEventType(event.type)}</Badge>
+                        <Badge variant="outline" className="ml-2 flex-shrink-0">
+                          {formatEventType(event.type)}
+                        </Badge>
                       </div>
                     ))
                   )}
                 </div>
-              </CardContent>
-            </Card>
-
-            {/* Status Legend */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">Appointment Status</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-sm">
-                    <div className="w-3 h-3 rounded-full bg-green-500"></div>
-                    <span>Approved - Your appointment is confirmed</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                    <span>Pending - Waiting for admin approval</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-sm">
-                    <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                    <span>Rejected - Please contact the parish for details</span>
-                  </div>
+                <div className="mt-4 pt-4 border-t">
+                  <p className="text-xs text-muted-foreground text-center">
+                    🔄 Public events • Visible to all parishioners
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -809,10 +904,10 @@ export default function ClientDashboardPage() {
                     variant="outline" 
                     className="w-full"
                     onClick={handleRefreshData}
-                    disabled={loading}
+                    disabled={refreshing}
                   >
-                    <CalendarDays className="w-4 h-4 mr-2" />
-                    Refresh Events
+                    <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+                    {refreshing ? 'Refreshing...' : 'Refresh All Data'}
                   </Button>
                 </div>
               </CardContent>

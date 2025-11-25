@@ -85,9 +85,6 @@ export default function ChurchLanding() {
                 <UserPlus className="w-4 h-4" />
                 Register
               </Button>
-              <Button className="bg-gradient-to-r from-sky-600 to-blue-700 hover:from-sky-700 hover:to-blue-800 text-white rounded-full font-semibold">
-                Give
-              </Button>
             </div>
           </div>
         )}
@@ -114,17 +111,9 @@ export default function ChurchLanding() {
               Experience faith, community, and grace with us. Join our vibrant congregation where believers gather to worship, grow, and serve together in love and truth.
             </p>
 
-            {/* CTA Buttons */}
+            {/* CTA Buttons - INALIS ANG MGA BUTTONS */}
             <div className="flex flex-wrap gap-4 pt-4">
-              <Button className="bg-gradient-to-r from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 text-white rounded-full px-8 py-6 font-bold shadow-lg">
-                Join a Service
-              </Button>
-              <Button variant="outline" className="border-sky-300 text-sky-700 hover:border-sky-500 hover:text-sky-600 hover:bg-sky-50 rounded-full px-8 py-6 font-semibold">
-                Connect Groups
-              </Button>
-              <Button variant="outline" className="border-sky-300 text-sky-700 hover:border-sky-500 hover:text-sky-600 hover:bg-sky-50 rounded-full px-8 py-6 font-semibold">
-                Give Online
-              </Button>
+              {/* Ang mga buttons ay inalis na */}
             </div>
           </div>
 
