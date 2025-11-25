@@ -154,10 +154,49 @@ const AdminDashboardPage = () => {
       const todaySnapshot = await getDocs(todayQuery);
       const activeUsersToday = todaySnapshot.size;
 
-      // Fetch upcoming events (you can create an 'events' collection later)
-      const upcomingEvents = 0; // Placeholder for now
+      // Fetch upcoming events from multiple possible collections
+      let upcomingEvents = 0;
+      const eventCollections = ['events', 'churchevents', 'church_events'];
+      
+      for (const collectionName of eventCollections) {
+        try {
+          const eventsQuery = query(
+            collection(db, collectionName),
+            where('status', '==', 'active')
+          );
+          const eventsSnapshot = await getDocs(eventsQuery);
+          
+          const now = new Date();
+          const futureEvents = eventsSnapshot.docs.filter(doc => {
+            const data = doc.data();
+            const eventDate = data.date;
+            try {
+              const eventDateObj = new Date(eventDate);
+              return eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
+            } catch {
+              return false;
+            }
+          });
+          
+          if (futureEvents.length > 0) {
+            upcomingEvents = futureEvents.length;
+            console.log(`✅ Found ${upcomingEvents} upcoming events in ${collectionName}`);
+            break; // Use the first collection that has events
+          }
+        } catch (error) {
+          console.log(`ℹ️ No events found in ${collectionName} or collection doesn't exist`);
+          continue;
+        }
+      }
 
       setStats({
+        totalParishioners,
+        upcomingEvents,
+        pendingAppointments,
+        activeUsersToday
+      });
+
+      console.log('📊 Dashboard Stats Updated:', {
         totalParishioners,
         upcomingEvents,
         pendingAppointments,
@@ -251,7 +290,14 @@ const AdminDashboardPage = () => {
       'baptism': 'Baptism',
       'funeral': 'Funeral Mass',
       'confirmation': 'Confirmation',
-      'first-communion': 'First Communion'
+      'first-communion': 'First Communion',
+      'confession': 'Confession',
+      'rosary': 'Holy Rosary',
+      'adoration': 'Adoration',
+      'recollection': 'Recollection',
+      'fiesta': 'Barangay Fiesta',
+      'simbang-gabi': 'Simbang Gabi',
+      'school-mass': 'School Mass'
     };
     return eventMap[eventType] || eventType;
   };
@@ -341,7 +387,7 @@ const AdminDashboardPage = () => {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stats.upcomingEvents}</div>
-              <p className="text-xs text-muted-foreground">Scheduled this week</p>
+              <p className="text-xs text-muted-foreground">Active public events</p>
             </CardContent>
           </Card>
 
@@ -496,9 +542,9 @@ const AdminDashboardPage = () => {
                     </Badge>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Email Service</span>
-                    <Badge variant="outline" className="bg-green-100 text-green-800">
-                      Active
+                    <span className="text-sm text-muted-foreground">Events Collection</span>
+                    <Badge variant="outline" className={stats.upcomingEvents > 0 ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}>
+                      {stats.upcomingEvents > 0 ? 'Active' : 'No Events'}
                     </Badge>
                   </div>
                 </div>

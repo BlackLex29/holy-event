@@ -33,7 +33,7 @@ import {
   CheckCircle,
   XCircle,
 } from 'lucide-react';
-import { collection, addDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '@/lib/firebase-config';
 import {
   Card,
@@ -96,6 +96,22 @@ export default function PostChurchEvent() {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  // Function to clean data before sending to Firestore
+  const cleanEventData = (data: any) => {
+    const cleaned = { ...data };
+    
+    // Remove undefined fields and convert empty strings to null
+    Object.keys(cleaned).forEach(key => {
+      if (cleaned[key] === undefined) {
+        delete cleaned[key];
+      } else if (cleaned[key] === '') {
+        cleaned[key] = null;
+      }
+    });
+    
+    return cleaned;
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     
@@ -126,46 +142,76 @@ export default function PostChurchEvent() {
     setIsSubmitting(true);
 
     try {
-      // Gumawa ng event object - SIGURADUHIN NA PUBLIC
-      const eventData: Omit<ChurchEvent, 'id'> = {
+      // Gumawa ng event object - CLEAN THE DATA FIRST
+      const eventData = cleanEventData({
         type: eventType,
         title: formData.title.trim(),
-        description: formData.description.trim(),
+        description: formData.description.trim() || null, // Convert empty string to null
         date: formData.date,
         time: formData.time,
         location: formData.location.trim(),
-        priest: formData.priest.trim() || undefined,
+        priest: formData.priest.trim() || null, // Convert empty string to null
         status: 'active',
-        isPublic: true, // IMPORTANTE: Lagi naka-true para makita ng lahat
+        isPublic: true,
         postedAt: serverTimestamp(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      };
+      });
 
-      console.log('📤 Submitting PUBLIC event to Firestore:', eventData);
+      console.log('📤 Submitting CLEANED event to Firestore:', eventData);
 
       // PRIMARY ATTEMPT: I-save sa "events" collection
       let docRef;
       let collectionUsed = 'events';
       
       try {
-        docRef = await addDoc(collection(db, 'events'), eventData);
-        console.log('✅ Event saved to "events" collection with ID:', docRef.id);
-      } catch (primaryError) {
-        console.log('🔄 Primary collection failed, trying alternatives...');
+        const eventsCollection = collection(db, 'events');
+        console.log('📁 Writing to events collection...');
+        
+        docRef = await addDoc(eventsCollection, eventData);
+        console.log('✅ SUCCESS! Event saved to "events" collection with ID:', docRef.id);
+        
+      } catch (primaryError: any) {
+        console.error('❌ Primary collection error:', primaryError);
         
         // SECONDARY ATTEMPT: Try 'churchevents' collection
         try {
-          docRef = await addDoc(collection(db, 'churchevents'), eventData);
+          console.log('🔄 Trying churchevents collection...');
+          const churchEventsCollection = collection(db, 'churchevents');
+          
+          docRef = await addDoc(churchEventsCollection, eventData);
           collectionUsed = 'churchevents';
           console.log('✅ Event saved to "churchevents" collection with ID:', docRef.id);
-        } catch (secondaryError) {
+          
+        } catch (secondaryError: any) {
+          console.error('❌ Secondary collection error:', secondaryError);
+          
           // TERTIARY ATTEMPT: Try 'church_events' collection
-          docRef = await addDoc(collection(db, 'church_events'), eventData);
-          collectionUsed = 'church_events';
-          console.log('✅ Event saved to "church_events" collection with ID:', docRef.id);
+          try {
+            console.log('🔄 Trying church_events collection...');
+            const churchEventsAltCollection = collection(db, 'church_events');
+            
+            docRef = await addDoc(churchEventsAltCollection, eventData);
+            collectionUsed = 'church_events';
+            console.log('✅ Event saved to "church_events" collection with ID:', docRef.id);
+            
+          } catch (tertiaryError: any) {
+            console.error('❌ All Firestore collections failed:', tertiaryError);
+            
+            // Check if it's a data validation error
+            if (tertiaryError.message.includes('Unsupported field value')) {
+              toast({
+                title: 'Data Error',
+                description: 'Please check all fields and try again.',
+                variant: 'destructive',
+              });
+            }
+            throw new Error('All Firestore attempts failed');
+          }
         }
       }
+
+      console.log(`📊 Final result: Saved to "${collectionUsed}" collection with ID: ${docRef.id}`);
 
       // I-save din sa localStorage para sa dashboard (fallback)
       const existingEvents = JSON.parse(localStorage.getItem('churchEvents') || '[]');
@@ -220,10 +266,11 @@ export default function PostChurchEvent() {
       }, 3000);
 
     } catch (error: any) {
-      console.error('❌ All Firestore attempts failed:', error);
+      console.error('❌ Final error in handleSubmit:', error);
       
       // ULTIMATE FALLBACK: localStorage only
       try {
+        console.log('💾 Attempting localStorage fallback...');
         const eventData = {
           type: eventType,
           title: formData.title.trim(),
@@ -231,9 +278,9 @@ export default function PostChurchEvent() {
           date: formData.date,
           time: formData.time,
           location: formData.location.trim(),
-          priest: formData.priest.trim(),
+          priest: formData.priest.trim() || null,
           status: 'active',
-          isPublic: true, // IMPORTANTE: Public pa rin
+          isPublic: true,
           id: `local-${Date.now()}`,
           postedAt: new Date().toISOString(),
           createdAt: new Date().toISOString(),
@@ -288,7 +335,7 @@ export default function PostChurchEvent() {
         console.error('❌ Even localStorage failed:', localError);
         toast({
           title: 'Posting Failed',
-          description: 'Could not save event. Please try again.',
+          description: 'Could not save event. Please check your connection and try again.',
           variant: 'destructive',
         });
       }
@@ -532,6 +579,9 @@ export default function PostChurchEvent() {
             onChange={handleInputChange}
             maxLength={50}
           />
+          <p className="text-xs text-muted-foreground">
+            Leave empty if not applicable
+          </p>
         </div>
 
         {/* Submit Button */}

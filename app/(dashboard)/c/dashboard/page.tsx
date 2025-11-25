@@ -1,4 +1,5 @@
-"use client"
+"use client";
+
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,7 +18,7 @@ import {
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
 import { db } from '@/lib/firebase-config';
-import { collection, query, where, orderBy, onSnapshot, Timestamp, addDoc } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 interface Appointment {
@@ -102,65 +103,6 @@ const convertTimestampToISO = (timestamp: any): string => {
   return new Date().toISOString();
 };
 
-// Function to add sample events to Firebase (for testing/initial setup)
-const addSampleEventsToFirebase = async () => {
-  try {
-    const sampleEvents = [
-      {
-        type: 'mass',
-        title: 'Sunday Holy Mass',
-        description: 'Regular Sunday mass with the parish community',
-        date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 2 days from now
-        time: '08:00',
-        location: 'Main Church',
-        priest: 'Fr. John Smith',
-        status: 'active',
-        isPublic: true,
-        postedAt: Timestamp.now(),
-        createdAt: Timestamp.now()
-      },
-      {
-        type: 'wedding',
-        title: 'Wedding Ceremony',
-        description: 'Wedding of Maria Santos and Juan Dela Cruz',
-        date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 5 days from now
-        time: '14:00',
-        location: 'Main Church',
-        priest: 'Fr. Michael Johnson',
-        status: 'active',
-        isPublic: true,
-        postedAt: Timestamp.now(),
-        createdAt: Timestamp.now()
-      },
-      {
-        type: 'baptism',
-        title: 'Infant Baptism',
-        description: 'Baptism ceremony for newborn children',
-        date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 7 days from now
-        time: '10:00',
-        location: 'Baptistry',
-        priest: 'Fr. John Smith',
-        status: 'active',
-        isPublic: true,
-        postedAt: Timestamp.now(),
-        createdAt: Timestamp.now()
-      }
-    ];
-
-    const eventsCollection = collection(db, 'events');
-    
-    for (const event of sampleEvents) {
-      await addDoc(eventsCollection, event);
-      console.log('✅ Added sample event:', event.title);
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('❌ Error adding sample events:', error);
-    return false;
-  }
-};
-
 export default function ClientDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<ChurchEvent[]>([]);
@@ -171,10 +113,9 @@ export default function ClientDashboardPage() {
   const { toast } = useToast();
   const router = useRouter();
 
-  // Real-time Firestore listeners
+  // Real-time Firestore listeners - READ ONLY
   useEffect(() => {
     const checkAuthentication = () => {
-      // Mas maluwag na authentication check para sa events
       const userId = getUserId();
       const userEmail = getUserEmail();
       
@@ -218,9 +159,9 @@ export default function ClientDashboardPage() {
 
         setUserData(currentUser);
 
-        console.log('🔄 Setting up real-time listeners...');
+        console.log('🔄 Setting up READ-ONLY real-time listeners...');
 
-        // REAL-TIME LISTENER FOR APPOINTMENTS (User-specific)
+        // REAL-TIME LISTENER FOR APPOINTMENTS (User-specific) - READ ONLY
         const appointmentsQuery = query(
           collection(db, 'appointments'),
           where('userId', '==', userId),
@@ -287,144 +228,143 @@ export default function ClientDashboardPage() {
           }
         );
 
-        // REAL-TIME LISTENER FOR CHURCH EVENTS (Public - dapat makita ng lahat ng users)
+        // REAL-TIME LISTENER FOR CHURCH EVENTS (Public - READ ONLY)
         const setupEventsListener = () => {
-          console.log('🎯 Setting up PUBLIC real-time events listener...');
+          console.log('🎯 Setting up READ-ONLY real-time events listener...');
           
           try {
-            // SIMPLIFIED QUERY: Kunin lang ang active at public events
-            const eventsQuery = query(
-              collection(db, 'events'),
-              where('status', '==', 'active'),
-              orderBy('date', 'asc')
-            );
+            // Try multiple collections for events
+            const collectionsToTry = ['events', 'churchevents', 'church_events'];
             
-            const eventsUnsubscribe = onSnapshot(
-              eventsQuery, 
-              (querySnapshot) => {
-                console.log('📡 Real-time PUBLIC events update:', querySnapshot.size, 'events');
-                
-                const churchEvents: ChurchEvent[] = [];
-                const now = new Date();
-                
-                querySnapshot.forEach((doc) => {
-                  const data = doc.data();
-                  const eventDate = data.date;
+            let activeUnsubscribe: (() => void) | null = null;
+            
+            const tryCollection = (collectionName: string): Promise<boolean> => {
+              return new Promise((resolve) => {
+                try {
+                  // SIMPLIFIED QUERY - No composite index needed
+                  // Just get all active events and filter client-side
+                  const eventsQuery = query(
+                    collection(db, collectionName),
+                    where('status', '==', 'active')
+                    // Removed orderBy('date', 'asc') to avoid composite index requirement
+                  );
                   
-                  try {
-                    const eventDateObj = new Date(eventDate);
-                    const isFutureEvent = eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
-                    
-                    // TANGGALIN ANG isPublic CHECK PARA MAKITA NG LAHAT
-                    // if (isFutureEvent && data.isPublic !== false) {
-                    if (isFutureEvent) {
-                      churchEvents.push({
-                        id: doc.id,
-                        type: data.type || '',
-                        title: data.title || '',
-                        description: data.description || '',
-                        date: eventDate,
-                        time: data.time || '',
-                        location: data.location || '',
-                        priest: data.priest || '',
-                        status: data.status || 'active',
-                        isPublic: data.isPublic !== false,
-                        postedAt: data.postedAt,
-                        createdAt: data.createdAt,
-                        updatedAt: data.updatedAt
+                  const eventsUnsubscribe = onSnapshot(
+                    eventsQuery, 
+                    (querySnapshot) => {
+                      console.log(`📡 Real-time PUBLIC events from ${collectionName}:`, querySnapshot.size, 'events');
+                      
+                      const churchEvents: ChurchEvent[] = [];
+                      const now = new Date();
+                      
+                      querySnapshot.forEach((doc) => {
+                        const data = doc.data();
+                        const eventDate = data.date;
+                        
+                        try {
+                          const eventDateObj = new Date(eventDate);
+                          const isFutureEvent = eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
+                          
+                          if (isFutureEvent && data.status === 'active') {
+                            churchEvents.push({
+                              id: doc.id,
+                              type: data.type || '',
+                              title: data.title || '',
+                              description: data.description || '',
+                              date: eventDate,
+                              time: data.time || '',
+                              location: data.location || '',
+                              priest: data.priest || '',
+                              status: data.status || 'active',
+                              isPublic: data.isPublic !== false,
+                              postedAt: data.postedAt,
+                              createdAt: data.createdAt,
+                              updatedAt: data.updatedAt
+                            });
+                          }
+                        } catch (error) {
+                          console.error('Error processing event date:', error);
+                        }
                       });
+                      
+                      // Sort by date client-side
+                      churchEvents.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                      
+                      if (churchEvents.length > 0) {
+                        console.log(`✅ Loaded ${churchEvents.length} PUBLIC events from ${collectionName}`);
+                        
+                        // Get upcoming 3 events
+                        const upcomingThreeEvents = churchEvents.slice(0, 3);
+                        
+                        setUpcomingEvents(upcomingThreeEvents);
+                        
+                        // Save to localStorage as backup
+                        localStorage.setItem('churchEvents', JSON.stringify(churchEvents.map(event => ({
+                          ...event,
+                          postedAt: convertTimestampToISO(event.postedAt),
+                          createdAt: convertTimestampToISO(event.createdAt),
+                          updatedAt: convertTimestampToISO(event.updatedAt)
+                        }))));
+                        
+                        activeUnsubscribe = eventsUnsubscribe;
+                        resolve(true);
+                      } else {
+                        console.log(`📭 No upcoming PUBLIC events found in ${collectionName}`);
+                        resolve(false);
+                      }
+                    },
+                    (error) => {
+                      console.error(`❌ ${collectionName} listener error:`, error);
+                      resolve(false);
                     }
-                  } catch (error) {
-                    console.error('Error processing event date:', error);
-                  }
-                });
-                
-                if (churchEvents.length > 0) {
-                  console.log(`✅ Loaded ${churchEvents.length} PUBLIC events`);
+                  );
                   
-                  // Sort by date and get upcoming 3 events
-                  const sortedEvents = churchEvents
-                    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-                    .slice(0, 3);
-                  
-                  setUpcomingEvents(sortedEvents);
-                  
-                  // Save to localStorage as backup
-                  localStorage.setItem('churchEvents', JSON.stringify(churchEvents.map(event => ({
-                    ...event,
-                    postedAt: convertTimestampToISO(event.postedAt),
-                    createdAt: convertTimestampToISO(event.createdAt),
-                    updatedAt: convertTimestampToISO(event.updatedAt)
-                  }))));
-                  
-                } else {
-                  console.log('📭 No upcoming PUBLIC events found');
-                  
-                  // Try to add sample events if no events exist
-                  const initializeSampleEvents = async () => {
-                    console.log('🆕 Initializing sample events...');
-                    const success = await addSampleEventsToFirebase();
-                    if (success) {
-                      toast({
-                        title: 'Sample Events Added',
-                        description: 'Sample church events have been added to the database.',
-                      });
-                    }
-                  };
-                  
-                  // Auto-create sample events if none exist
-                  initializeSampleEvents();
-                  loadEventsFromLocalStorage();
+                } catch (error) {
+                  console.error(`❌ Cannot setup ${collectionName} listener:`, error);
+                  resolve(false);
                 }
-              },
-              (error) => {
-                console.error('❌ PUBLIC Events listener error:', error);
-                
-                // Try to create the events collection with sample data
-                if (error.code === 'failed-precondition' || error.code === 'not-found') {
-                  console.log('🆕 Events collection might not exist, attempting to create with sample data...');
-                  
-                  const createSampleEvents = async () => {
-                    const success = await addSampleEventsToFirebase();
-                    if (success) {
-                      toast({
-                        title: 'Events Collection Created',
-                        description: 'Sample events have been added to the database.',
-                      });
-                    } else {
-                      toast({
-                        title: 'Events Not Available',
-                        description: 'Please check if the events collection exists in Firebase.',
-                        variant: 'destructive',
-                      });
-                    }
-                  };
-                  
-                  createSampleEvents();
-                }
-                
+              });
+            };
+
+            // Try all collections sequentially
+            const tryCollectionsSequentially = async () => {
+              let success = false;
+              for (const collectionName of collectionsToTry) {
+                success = await tryCollection(collectionName);
+                if (success) break;
+              }
+
+              // If all collections fail, load from localStorage
+              if (!success) {
+                console.log('📭 No events found in any collection, loading from localStorage');
                 loadEventsFromLocalStorage();
               }
-            );
-            
-            return eventsUnsubscribe;
+            };
+
+            tryCollectionsSequentially();
+
+            // Return cleanup function
+            return () => {
+              if (activeUnsubscribe) {
+                activeUnsubscribe();
+              }
+            };
             
           } catch (error) {
             console.error('❌ Cannot setup PUBLIC events listener:', error);
             loadEventsFromLocalStorage();
-            return () => {};
           }
         };
 
         // Setup real-time events listener
-        const eventsUnsubscribe = setupEventsListener();
+        const eventsCleanup = setupEventsListener();
 
         setLoading(false);
 
         return () => {
           console.log('🧹 Cleaning up real-time listeners...');
           appointmentsUnsubscribe();
-          if (eventsUnsubscribe) eventsUnsubscribe();
+          if (eventsCleanup) eventsCleanup();
         };
 
       } catch (error) {
@@ -472,10 +412,12 @@ export default function ClientDashboardPage() {
       const storedEvents = localStorage.getItem('churchEvents');
       if (storedEvents) {
         const allEvents: ChurchEvent[] = JSON.parse(storedEvents);
+        const now = new Date();
         const futureEvents = allEvents
           .filter(event => {
             try {
-              return new Date(event.date) >= new Date();
+              const eventDate = new Date(event.date);
+              return eventDate >= new Date(now.setHours(0, 0, 0, 0)) && event.status === 'active';
             } catch {
               return false;
             }
@@ -486,24 +428,8 @@ export default function ClientDashboardPage() {
         setUpcomingEvents(futureEvents);
         console.log('📱 Loaded events from localStorage:', futureEvents.length);
       } else {
-        console.log('📱 No events in localStorage, using sample events');
-        // Create sample events for display
-        const sampleEvents: ChurchEvent[] = [
-          {
-            id: '1',
-            type: 'mass',
-            title: 'Sunday Holy Mass',
-            description: 'Regular Sunday mass with the parish community',
-            date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            time: '08:00',
-            location: 'Main Church',
-            priest: 'Fr. John Smith',
-            status: 'active',
-            isPublic: true,
-            postedAt: new Date().toISOString()
-          }
-        ];
-        setUpcomingEvents(sampleEvents);
+        console.log('📱 No events in localStorage');
+        setUpcomingEvents([]);
       }
     } catch (error) {
       console.error('Error loading events from localStorage:', error);
@@ -568,17 +494,18 @@ export default function ClientDashboardPage() {
   const handleRefreshData = async () => {
     setRefreshing(true);
     try {
+      // Clear localStorage to force fresh data
+      localStorage.removeItem('churchEvents');
+      localStorage.removeItem('appointments');
+      
       // Clear current data
       setAppointments([]);
       setUpcomingEvents([]);
       
-      // Reload from localStorage first for immediate response
-      loadAppointmentsFromLocalStorage();
-      loadEventsFromLocalStorage();
-      
+      // Reload from Firestore
       toast({
         title: 'Refreshing Data',
-        description: 'Checking for latest updates...',
+        description: 'Fetching latest data from server...',
       });
       
       // The real-time listeners will automatically update the data
@@ -877,38 +804,6 @@ export default function ClientDashboardPage() {
                   <p className="text-xs text-muted-foreground text-center">
                     🔄 Public events • Visible to all parishioners
                   </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Quick Actions */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-sm">Quick Actions</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  <Button asChild className="w-full">
-                    <Link href="/c/appointments">
-                      <Calendar className="w-4 h-4 mr-2" />
-                      Book New Appointment
-                    </Link>
-                  </Button>
-                  <Button asChild variant="outline" className="w-full">
-                    <Link href="/c/tour">
-                      <MapPin className="w-4 h-4 mr-2" />
-                      Church Virtual View
-                    </Link>
-                  </Button>
-                  <Button 
-                    variant="outline" 
-                    className="w-full"
-                    onClick={handleRefreshData}
-                    disabled={refreshing}
-                  >
-                    <RefreshCw className={`w-4 h-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
-                    {refreshing ? 'Refreshing...' : 'Refresh All Data'}
-                  </Button>
                 </div>
               </CardContent>
             </Card>
