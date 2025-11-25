@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Church, AlertCircle, RefreshCw, Eye, EyeOff, ArrowLeft, MailCheck, LockKeyhole } from 'lucide-react';
+import { Church, RefreshCw, Eye, EyeOff, ArrowLeft, MailCheck, LockKeyhole } from 'lucide-react';
 import {
     signInWithEmailAndPassword,
     getMultiFactorResolver,
