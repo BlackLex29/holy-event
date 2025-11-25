@@ -12,10 +12,12 @@ import {
     SelectTrigger,
     SelectValue,
 } from '@/components/ui/select';
-import { Church, Calendar, MailCheck, RefreshCw, Check, X, Home, Eye, EyeOff } from 'lucide-react';
+import { Church, Calendar, MailCheck, RefreshCw, Check, X, Home, Eye, EyeOff, Send } from 'lucide-react';
 import {
     createUserWithEmailAndPassword,
     updateProfile,
+    sendEmailVerification,
+    User
 } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase-config';
 import { doc, setDoc, getDocs, query, where, collection } from 'firebase/firestore';
@@ -30,13 +32,10 @@ const RegisterPage = () => {
     const [acceptedTerms, setAcceptedTerms] = useState(false);
     const [submitted, setSubmitted] = useState(false);
     const [checkingEmail, setCheckingEmail] = useState(false);
-    const [verificationSent, setVerificationSent] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
-    const [verificationCode, setVerificationCode] = useState('');
-    const [showVerificationInput, setShowVerificationInput] = useState(false);
-    const [otpHash, setOtpHash] = useState('');
-    const [otpExpiresAt, setOtpExpiresAt] = useState(0);
-    const [registrationComplete, setRegistrationComplete] = useState(false);
+    const [registrationStep, setRegistrationStep] = useState<'form' | 'verification'>('form');
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [verificationEmailSent, setVerificationEmailSent] = useState(false);
 
     const [formData, setFormData] = useState({
         fullName: '',
@@ -96,17 +95,20 @@ const RegisterPage = () => {
             
             const querySnapshot = await getDocs(usersQuery);
             return !querySnapshot.empty;
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error checking email:', error);
             
-            if (error instanceof Error) {
-                if (error.message.includes('permission') || error.message.includes('Missing or insufficient permissions')) {
-                    console.warn('Permission denied checking email, proceeding with registration');
-                    return false;
-                }
+            // If permission error, skip the check and proceed
+            if (error?.code === 'permission-denied' || 
+                error?.message?.includes('permission') || 
+                error?.message?.includes('Missing or insufficient permissions')) {
+                console.warn('Permission denied checking email, proceeding with registration');
+                return false; // Assume email doesn't exist
             }
             
-            throw new Error('Unable to check email availability. Please try again.');
+            // For other errors, don't block registration
+            console.warn('Error checking email existence, proceeding anyway:', error);
+            return false; // Assume email doesn't exist to allow registration
         }
     };
 
@@ -122,93 +124,70 @@ const RegisterPage = () => {
         return hasBirthdayOccurred ? age : age - 1;
     };
 
-    // ✅ SIMPLIFIED: Working OTP Email Function
-    const sendVerificationEmail = async (email: string, name: string): Promise<{otpHash: string; expiresAt: number}> => {
+    // FIXED: Email verification with proper domain configuration
+    const sendFirebaseVerificationEmail = async (user: User) => {
         try {
-            console.log("📤 Sending verification email to:", email);
+            // Check if running on localhost or production
+            const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
             
-            const response = await fetch('/api/send-email-otp', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    email: email.toLowerCase().trim(),
-                    name: name.trim()
-                }),
-            });
-
-            const data = await response.json();
-
-            console.log("📨 API Response:", {
-                status: response.status,
-                ok: response.ok,
-                data: data
-            });
-
-            if (!response.ok) {
-                const errorMessage = data.error || data.message || `HTTP error! status: ${response.status}`;
-                console.error("❌ API Error:", errorMessage);
-                throw new Error(errorMessage);
-            }
-
-            // ✅ DEVELOPMENT: Show OTP in console for testing
-            if (data.debugOtp) {
-                console.log("🔓 DEVELOPMENT OTP:", data.debugOtp);
-            }
-
-            return {
-                otpHash: data.otpHash,
-                expiresAt: data.expiresAt
+            // Set the continue URL based on environment
+            // IMPORTANT: Replace 'holy-event.vercel.app' with your actual production domain
+            const continueUrl = isLocalhost 
+                ? `http://localhost:3000/login?verified=true`
+                : `https://holy-event.vercel.app/login?verified=true`;
+            
+            // Configure action code settings
+            const actionCodeSettings = {
+                url: continueUrl,
+                handleCodeInApp: true,
             };
-        } catch (error) {
-            console.error('Error sending verification email:', error);
-            throw error;
-        }
-    };
 
-    // ✅ SIMPLIFIED: OTP Verification
-    const verifyOTPCode = async (inputCode: string, storedHash: string, expiresAt: number): Promise<boolean> => {
-        if (Date.now() > expiresAt) {
-            return false;
-        }
-
-        try {
-            const response = await fetch('/api/verify-otp', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    code: inputCode,
-                    hash: storedHash,
-                    email: formData.email.toLowerCase()
-                }),
-            });
-
-            const data = await response.json();
-            return data.success === true;
-        } catch (error) {
-            console.error('Error verifying OTP:', error);
-            return false;
+            await sendEmailVerification(user, actionCodeSettings);
+            setVerificationEmailSent(true);
+            
+            console.log('✅ Verification email sent successfully to:', user.email);
+            console.log('Continue URL:', continueUrl);
+            return true;
+        } catch (error: any) {
+            console.error('❌ Error sending verification email:', error);
+            
+            // Specific error handling
+            if (error.code === 'auth/too-many-requests') {
+                throw new Error('Too many verification emails sent. Please wait a few minutes before trying again.');
+            } else if (error.code === 'auth/invalid-email') {
+                throw new Error('Invalid email address. Please check your email.');
+            } else if (error.code === 'auth/user-disabled') {
+                throw new Error('This account has been disabled. Please contact support.');
+            } else if (error.code === 'auth/invalid-continue-uri') {
+                throw new Error('Configuration error. Please contact support.');
+            } else {
+                throw new Error('Failed to send verification email. Please try again or contact support if the problem persists.');
+            }
         }
     };
 
     const createFirebaseUser = async () => {
         try {
+            // Create user in Firebase Auth
             const userCredential = await createUserWithEmailAndPassword(
                 auth,
                 formData.email,
                 formData.password
             );
 
-            await updateProfile(userCredential.user, {
+            const user = userCredential.user;
+            setCurrentUser(user);
+
+            // Update profile with display name
+            await updateProfile(user, {
                 displayName: formData.fullName
             });
 
+            // Calculate age and determine role
             const finalAge = calculateAge(formData.birthdate);
             const role = formData.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() ? 'admin' : 'user';
             
+            // Prepare user data for Firestore
             const userData = {
                 fullName: formData.fullName,
                 email: formData.email.toLowerCase(),
@@ -218,24 +197,25 @@ const RegisterPage = () => {
                 age: finalAge,
                 gender: formData.gender,
                 role: role,
-                status: 'active',
-                emailVerified: true,
+                status: 'pending',
+                emailVerified: false,
                 createdAt: new Date(),
-                verifiedAt: new Date(),
-                parishionerId: `P-${new Date().getFullYear()}-${userCredential.user.uid.slice(-5).toUpperCase()}`,
+                parishionerId: `P-${new Date().getFullYear()}-${user.uid.slice(-5).toUpperCase()}`,
             };
 
-            await setDoc(doc(db, 'users', userCredential.user.uid), userData);
+            // Save user data to Firestore
+            await setDoc(doc(db, 'users', user.uid), userData);
             
-            await setDoc(doc(db, 'authentication', userCredential.user.uid), {
+            // Save authentication data
+            await setDoc(doc(db, 'authentication', user.uid), {
                 email: formData.email.toLowerCase(),
-                emailVerified: true,
-                status: 'active',
+                emailVerified: false,
+                status: 'pending',
                 createdAt: new Date(),
-                verifiedAt: new Date()
+                lastVerificationEmailSent: new Date()
             });
 
-            setRegistrationComplete(true);
+            return user;
 
         } catch (err: any) {
             console.error('Firebase creation error:', err);
@@ -258,54 +238,35 @@ const RegisterPage = () => {
         }
     };
 
-    const verifyCode = async () => {
-        if (!verificationCode || verificationCode.length !== 6) {
-            setError('Please enter a valid 6-digit code');
-            return;
-        }
-
+    const resendVerificationEmail = async () => {
+        if (!currentUser) return;
+        
         setSubmitted(true);
         setError('');
 
         try {
-            const isValid = await verifyOTPCode(verificationCode, otpHash, otpExpiresAt);
+            // Reload user to get latest state
+            await currentUser.reload();
             
-            if (!isValid) {
-                if (Date.now() > otpExpiresAt) {
-                    setError('Verification code has expired. Please request a new code.');
-                } else {
-                    setError('Invalid verification code. Please check the code and try again.');
-                }
-                setSubmitted(false);
+            // Check if already verified
+            if (currentUser.emailVerified) {
+                setError('Your email is already verified! You can now login.');
+                setTimeout(() => {
+                    router.push('/login?verified=true');
+                }, 2000);
                 return;
             }
 
-            await createFirebaseUser();
-            setVerificationSent(true);
-            setShowVerificationInput(false);
-
-        } catch (err: any) {
-            console.error('Verification error:', err);
-            setError(err.message || 'Verification failed. Please try again.');
-        } finally {
-            setSubmitted(false);
-        }
-    };
-
-    const resendVerificationCode = async () => {
-        setSubmitted(true);
-        setError('');
-
-        try {
-            const result = await sendVerificationEmail(formData.email, formData.fullName);
+            await sendFirebaseVerificationEmail(currentUser);
             
-            setOtpHash(result.otpHash);
-            setOtpExpiresAt(result.expiresAt);
+            // Update Firestore with new timestamp
+            await setDoc(doc(db, 'authentication', currentUser.uid), {
+                lastVerificationEmailSent: new Date()
+            }, { merge: true });
             
-            setError('New verification code sent! Please check your email.');
+            setError('✅ Verification email sent! Please check your inbox and spam folder.');
         } catch (err: any) {
-            console.error('Resend error:', err);
-            setError('Failed to resend verification code. Please try again.');
+            setError(err.message || 'Failed to resend verification email.');
         } finally {
             setSubmitted(false);
         }
@@ -314,10 +275,6 @@ const RegisterPage = () => {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
-
-        console.log("📝 Form data:", formData);
-        console.log("✅ Terms accepted:", acceptedTerms);
-        console.log("🔐 Password valid:", isPasswordValid);
 
         if (!acceptedTerms) {
             setError('Please accept the terms and conditions');
@@ -352,29 +309,52 @@ const RegisterPage = () => {
         }
 
         try {
+            setSubmitted(true);
             setCheckingEmail(true);
-            console.log("🔍 Checking email availability...");
 
-            const emailExists = await checkEmailExists(formData.email);
-            console.log("📧 Email exists:", emailExists);
+            console.log('Starting registration process...');
+            console.log('Email to check:', formData.email);
+
+            // Check if email already exists (with timeout)
+            const emailCheckPromise = checkEmailExists(formData.email);
+            const timeoutPromise = new Promise<boolean>((_, reject) => 
+                setTimeout(() => reject(new Error('Email check timeout')), 5000)
+            );
+
+            let emailExists = false;
+            try {
+                emailExists = await Promise.race([emailCheckPromise, timeoutPromise]);
+            } catch (timeoutError) {
+                console.warn('Email check timed out or failed, proceeding with registration');
+                emailExists = false; // Proceed if check fails/times out
+            }
             
             if (emailExists) {
                 setError('This email is already registered. Please use a different email or sign in.');
                 setCheckingEmail(false);
+                setSubmitted(false);
                 return;
             }
 
-            console.log("📤 Sending verification email...");
-            const result = await sendVerificationEmail(formData.email, formData.fullName);
+            console.log('Email available, creating user...');
+            setCheckingEmail(false);
+
+            // Create Firebase user
+            const user = await createFirebaseUser();
             
-            setOtpHash(result.otpHash);
-            setOtpExpiresAt(result.expiresAt);
-            setShowVerificationInput(true);
-            console.log("✅ Verification code sent successfully");
+            console.log('User created, sending verification email...');
+            
+            // Send verification email
+            await sendFirebaseVerificationEmail(user);
+            
+            console.log('Moving to verification step...');
+            
+            // Move to verification step
+            setRegistrationStep('verification');
 
         } catch (err: any) {
             console.error('Registration error:', err);
-            setError(err.message || 'Failed to send verification code. Please try again.');
+            setError(err.message || 'Registration failed. Please try again.');
         } finally {
             setCheckingEmail(false);
             setSubmitted(false);
@@ -400,59 +380,7 @@ const RegisterPage = () => {
                 </CardHeader>
 
                 <CardContent className="p-8">
-                    {/* Development OTP Display */}
-                    {process.env.NODE_ENV === 'development' && showVerificationInput && (
-                        <div className="mb-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg">
-                            <p className="text-yellow-800 text-sm font-semibold">Development Mode</p>
-                            <p className="text-yellow-700 text-xs">
-                                Check browser console for OTP code (F12 → Console)
-                            </p>
-                        </div>
-                    )}
-
-                    {verificationSent && registrationComplete ? (
-                        <div className="text-center space-y-6 py-4">
-                            <div className="flex justify-center">
-                                <div className="rounded-full bg-green-100 p-4">
-                                    <MailCheck className="w-12 h-12 text-green-600" />
-                                </div>
-                            </div>
-                            
-                            <div className="space-y-3">
-                                <h2 className="text-2xl font-bold text-green-800">
-                                    Registration Successful!
-                                </h2>
-                                <p className="text-muted-foreground">
-                                    Your account has been created and verified successfully.
-                                </p>
-                            </div>
-
-                            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-                                <h3 className="font-semibold text-green-800 mb-2">Welcome to Holy Events!</h3>
-                                <p className="text-sm text-green-700">
-                                    You can now login to your account and start using our services.
-                                </p>
-                            </div>
-
-                            <div className="space-y-3 pt-4">
-                                <Button 
-                                    onClick={() => router.push('/login')}
-                                    className="w-full bg-green-600 hover:bg-green-700"
-                                >
-                                    Go to Login Page
-                                </Button>
-                                
-                                <Button 
-                                    onClick={() => router.push('/')}
-                                    variant="outline"
-                                    className="w-full"
-                                >
-                                    <Home className="mr-2 h-4 w-4" />
-                                    Back to Website
-                                </Button>
-                            </div>
-                        </div>
-                    ) : showVerificationInput ? (
+                    {registrationStep === 'verification' ? (
                         <div className="text-center space-y-6 py-4">
                             <div className="flex justify-center">
                                 <div className="rounded-full bg-blue-100 p-4">
@@ -465,62 +393,39 @@ const RegisterPage = () => {
                                     Verify Your Email
                                 </h2>
                                 <p className="text-muted-foreground">
-                                    We sent a 6-digit verification code to:
+                                    We sent a verification email to:
                                 </p>
                                 <p className="font-semibold text-lg break-all bg-blue-50 p-3 rounded border">
                                     {formData.email}
                                 </p>
                                 <p className="text-sm text-gray-600">
-                                    Please enter the code to complete your registration
+                                    Please check your email and click the verification link to activate your account.
                                 </p>
                             </div>
 
-                            <div className="space-y-4">
-                                <div className="space-y-2">
-                                    <label htmlFor="verificationCode" className="block text-sm font-medium text-gray-700">
-                                        Verification Code *
-                                    </label>
-                                    <Input
-                                        id="verificationCode"
-                                        type="text"
-                                        placeholder="123456"
-                                        value={verificationCode}
-                                        onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                                        required
-                                        maxLength={6}
-                                        className="text-center text-2xl font-mono tracking-widest"
-                                    />
-                                    <p className="text-xs text-gray-500">
-                                        Enter the 6-digit code from your email
+                            {verificationEmailSent && (
+                                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                                    <p className="text-green-700 font-medium">
+                                        ✅ Verification email sent successfully!
                                     </p>
                                 </div>
+                            )}
 
-                                {error && (
-                                    <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
-                                        {error}
-                                    </div>
-                                )}
+                            {error && (
+                                <div className={`p-3 border rounded text-sm ${
+                                    error.includes('✅') 
+                                        ? 'bg-green-100 border-green-300 text-green-700' 
+                                        : 'bg-red-100 border-red-300 text-red-700'
+                                }`}>
+                                    {error}
+                                </div>
+                            )}
 
+                            <div className="space-y-4">
                                 <div className="space-y-3">
                                     <Button 
-                                        onClick={verifyCode}
+                                        onClick={resendVerificationEmail}
                                         className="w-full bg-blue-600 hover:bg-blue-700"
-                                        disabled={submitted || verificationCode.length !== 6}
-                                    >
-                                        {submitted ? (
-                                            <>
-                                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                                                Verifying & Creating Account...
-                                            </>
-                                        ) : (
-                                            'Verify & Complete Registration'
-                                        )}
-                                    </Button>
-
-                                    <Button 
-                                        onClick={resendVerificationCode}
-                                        variant="outline"
-                                        className="w-full"
                                         disabled={submitted}
                                     >
                                         {submitted ? (
@@ -529,19 +434,63 @@ const RegisterPage = () => {
                                                 Sending...
                                             </>
                                         ) : (
-                                            'Resend Verification Code'
+                                            <>
+                                                <Send className="mr-2 h-4 w-4" />
+                                                Resend Verification Email
+                                            </>
                                         )}
+                                    </Button>
+
+                                    <Button 
+                                        onClick={() => router.push('/login')}
+                                        variant="outline"
+                                        className="w-full"
+                                    >
+                                        Go to Login Page
+                                    </Button>
+
+                                    <Button 
+                                        onClick={() => router.push('/')}
+                                        variant="ghost"
+                                        className="w-full"
+                                    >
+                                        <Home className="mr-2 h-4 w-4" />
+                                        Back to Website
                                     </Button>
                                 </div>
                             </div>
 
                             <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                                <h4 className="font-semibold text-yellow-800 mb-2">Important:</h4>
-                                <ul className="text-sm text-yellow-700 space-y-1 text-left">
-                                    <li>• The verification code expires in 10 minutes</li>
-                                    <li>• Check your spam folder if you don't see the email</li>
-                                    <li>• Your account will be created only after verification</li>
+                                <h4 className="font-semibold text-yellow-800 mb-2">Important Tips:</h4>
+                                <ul className="text-sm text-yellow-700 space-y-2 text-left">
+                                    <li className="flex items-start gap-2">
+                                        <span className="font-bold mt-0.5">📧</span>
+                                        <span><strong>Check spam/junk folder</strong> - Firebase emails sometimes go there</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="font-bold mt-0.5">⏰</span>
+                                        <span>Email may take <strong>1-5 minutes</strong> to arrive</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="font-bold mt-0.5">📱</span>
+                                        <span>Check on <strong>mobile email apps</strong> as well</span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="font-bold mt-0.5">🔍</span>
+                                        <span>Search for emails from <strong>"noreply"</strong> or <strong>"Firebase"</strong></span>
+                                    </li>
+                                    <li className="flex items-start gap-2">
+                                        <span className="font-bold mt-0.5">✅</span>
+                                        <span>You can login <strong>after verifying</strong> your email</span>
+                                    </li>
                                 </ul>
+                            </div>
+
+                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                <p className="text-sm text-blue-800">
+                                    <strong>Still can't find the email?</strong> Click "Resend Verification Email" above and wait a few minutes. 
+                                    Make sure to check your spam folder!
+                                </p>
                             </div>
                         </div>
                     ) : (
@@ -739,7 +688,7 @@ const RegisterPage = () => {
                                         >
                                             Terms and Conditions
                                         </button>
-                                        {' '}and understand that I need to verify my email before my account is created.
+                                        {' '}and understand that I need to verify my email before my account is activated.
                                     </span>
                                 </label>
                             </div>
@@ -757,9 +706,12 @@ const RegisterPage = () => {
                                             Checking Availability...
                                         </>
                                     ) : submitted ? (
-                                        'Sending Verification Code...'
+                                        <>
+                                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                            Creating Account...
+                                        </>
                                     ) : (
-                                        'Send Verification Code'
+                                        'Create Account'
                                     )}
                                 </Button>
                             </div>
@@ -775,6 +727,7 @@ const RegisterPage = () => {
                 </CardContent>
             </Card>
 
+            {/* Terms and Conditions Modal */}
             {showTerms && (
                 <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                     <Card className="max-w-2xl max-h-[80vh] overflow-y-auto">
@@ -788,39 +741,17 @@ const RegisterPage = () => {
 
                                 <section>
                                     <h3 className="font-semibold text-lg mb-2">2. Email Verification Required</h3>
-                                    <p>Your account will be created only after you verify your email address using the 6-digit code we send to your email. This ensures the security of your account and prevents unauthorized registrations.</p>
+                                    <p>Your account will be activated only after you verify your email address using the link we send to your email.</p>
                                 </section>
 
                                 <section>
                                     <h3 className="font-semibold text-lg mb-2">3. Password Security</h3>
-                                    <p>You are responsible for maintaining the confidentiality of your password. Your password must meet the following requirements:</p>
-                                    <ul className="list-disc list-inside mt-2 space-y-1">
-                                        <li>Minimum 8 characters in length</li>
-                                        <li>At least one uppercase letter (A-Z)</li>
-                                        <li>At least one lowercase letter (a-z)</li>
-                                        <li>At least one number (0-9)</li>
-                                        <li>At least one special character (!@#$%^&* etc.)</li>
-                                    </ul>
+                                    <p>You are responsible for maintaining the confidentiality of your password.</p>
                                 </section>
 
                                 <section>
-                                    <h3 className="font-semibold text-lg mb-2">4. Account Security</h3>
-                                    <p>We use Firebase Authentication (by Google) for secure account management. Your password is encrypted and stored securely. Your account will only be activated after successful email verification.</p>
-                                </section>
-
-                                <section>
-                                    <h3 className="font-semibold text-lg mb-2">5. Data Privacy</h3>
-                                    <p>Your personal information will only be used for parish communications, event management, and religious purposes. We will never share your information with third parties without your consent.</p>
-                                </section>
-
-                                <section>
-                                    <h3 className="font-semibold text-lg mb-2">6. Community Guidelines</h3>
-                                    <p>As a member of our parish community, we expect respectful behavior and adherence to Christian values.</p>
-                                </section>
-
-                                <section>
-                                    <h3 className="font-semibold text-lg mb-2">7. Verification Process</h3>
-                                    <p>After submitting your registration form, you will receive a 6-digit verification code via email. This code expires in 10 minutes. Your account will be created only after you successfully verify your email with this code.</p>
+                                    <h3 className="font-semibold text-lg mb-2">4. Data Privacy</h3>
+                                    <p>Your personal information will only be used for parish communications and event management.</p>
                                 </section>
 
                                 <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mt-4">

@@ -1,126 +1,253 @@
-// app/api/send-email-otp/route.ts
-export const runtime = "nodejs";
-
 import { NextRequest, NextResponse } from "next/server";
-import * as SibApiV3Sdk from '@getbrevo/brevo';
 
-interface OTPRequestBody {
+interface SendOTPRequestBody {
   email: string;
   name: string;
 }
 
-const OTP_EXPIRY_MINUTES = 10;
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Generate a random 6-digit OTP
+function generateOTP(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+// Create a hash containing email, OTP, and timestamp
+function createOTPHash(email: string, otp: string, expiresAt: number): string {
+  const data = `${email.toLowerCase()}:${otp}:${expiresAt}`;
+  return Buffer.from(data).toString('base64');
+}
 
 export async function POST(request: NextRequest) {
-  console.log("🚨 === send-email-otp API called ===");
-
+  console.log("📧 Starting OTP email process...");
+  
   try {
-    // Parse request body with error handling
-    let body: OTPRequestBody;
-    try {
-      body = await request.json();
-    } catch (parseError) {
-      console.error("❌ Failed to parse request body:", parseError);
-      return NextResponse.json(
-        { error: "Invalid request body" }, 
-        { status: 400 }
-      );
-    }
-
+    const body: SendOTPRequestBody = await request.json();
     const { email, name } = body;
-    console.log("📧 Request details:", { email, name });
+
+    console.log("📝 Received request for:", { email: email?.toLowerCase(), name });
 
     // Validation
     if (!email || !name) {
-      console.error("❌ Missing email or name");
       return NextResponse.json(
-        { error: "Email and name are required" }, 
+        { error: "Email and name are required" },
         { status: 400 }
       );
     }
 
-    if (!EMAIL_REGEX.test(email)) {
-      console.error("❌ Invalid email format:", email);
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
       return NextResponse.json(
-        { error: "Invalid email format" }, 
+        { error: "Invalid email format" },
         { status: 400 }
       );
     }
 
-    if (name.trim().length < 2) {
-      console.error("❌ Name too short:", name);
+    // Check if Brevo API key is configured
+    const brevoApiKey = process.env.BREVO_API_KEY;
+    console.log("🔑 Brevo API Key configured:", !!brevoApiKey);
+    
+    if (!brevoApiKey) {
+      console.error("❌ BREVO_API_KEY is not configured in environment variables");
       return NextResponse.json(
-        { error: "Name must be at least 2 characters long" }, 
-        { status: 400 }
+        { error: "Email service is not configured. Please contact support." },
+        { status: 500 }
       );
     }
 
-    // Check API key
-    if (!process.env.BREVO_API_KEY) {
-      console.error("❌ Missing BREVO_API_KEY in environment variables");
-      return NextResponse.json({ 
-        error: "Email service not configured. Please contact support." 
-      }, { status: 503 });
-    }
+    // Generate OTP and expiration time (10 minutes from now)
+    const otp = generateOTP();
+    const expiresAt = Date.now() + (10 * 60 * 1000); // 10 minutes
 
-    console.log("🔐 API Key exists");
+    // Create hash
+    const otpHash = createOTPHash(email, otp, expiresAt);
 
-    // Generate OTP
-    const OTP_CODE = generateOTP();
-    console.log("🔐 Generated OTP for:", email);
-    if (process.env.NODE_ENV === 'development') {
-      console.log("🔓 DEV OTP:", OTP_CODE);
-    }
+    console.log("🔐 Generated OTP for:", email.toLowerCase());
 
-    const timestamp = Date.now();
-    const otpHash = Buffer.from(`${email.toLowerCase()}:${OTP_CODE}:${timestamp}`).toString("base64");
-    const expiresAt = timestamp + OTP_EXPIRY_MINUTES * 60 * 1000;
+    // Send email using Brevo TRANSACTIONAL API
+    const brevoPayload = {
+      sender: {
+        name: 'Holy Event',
+        email: process.env.BREVO_SENDER_EMAIL || 'andreanicolenatividad13@gmail.com'
+      },
+      to: [
+        {
+          email: email.toLowerCase().trim(),
+          name: name.trim()
+        }
+      ],
+      subject: 'Email Verification Code - Holy Event',
+      htmlContent: `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body { 
+                  font-family: Arial, sans-serif; 
+                  line-height: 1.6; 
+                  color: #333; 
+                  max-width: 600px; 
+                  margin: 0 auto; 
+                  padding: 20px; 
+                  background-color: #f5f5f5;
+                }
+                .container {
+                  background-color: white;
+                  border-radius: 10px;
+                  overflow: hidden;
+                  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }
+                .header { 
+                  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                  padding: 30px; 
+                  text-align: center; 
+                }
+                .header h1 { 
+                  color: white; 
+                  margin: 0; 
+                  font-size: 28px; 
+                }
+                .content { 
+                  padding: 30px; 
+                }
+                .otp-code { 
+                  font-size: 42px; 
+                  font-weight: bold; 
+                  text-align: center; 
+                  letter-spacing: 8px; 
+                  color: #059669; 
+                  margin: 30px 0; 
+                  font-family: monospace;
+                  background-color: #f0fdf4;
+                  padding: 20px;
+                  border-radius: 8px;
+                  border: 2px dashed #059669;
+                }
+                .footer { 
+                  text-align: center; 
+                  margin-top: 30px; 
+                  padding-top: 20px; 
+                  border-top: 1px solid #e5e7eb; 
+                  color: #6b7280; 
+                  font-size: 14px; 
+                }
+                .warning { 
+                  background: #fef3cd; 
+                  border: 1px solid #fde68a; 
+                  padding: 15px; 
+                  border-radius: 5px; 
+                  margin: 20px 0; 
+                }
+                .info-box {
+                  background: #e0f2fe;
+                  border: 1px solid #bae6fd;
+                  padding: 15px;
+                  border-radius: 5px;
+                  margin: 20px 0;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>🙏 Holy Event</h1>
+                </div>
+                <div class="content">
+                    <h2>Hello ${name},</h2>
+                    <p>Welcome to Holy Event! Please use the verification code below to complete your registration:</p>
+                    
+                    <div class="otp-code">${otp}</div>
+                    
+                    <div class="info-box">
+                        <p style="margin: 0;"><strong>📋 How to use this code:</strong></p>
+                        <ol style="margin: 10px 0 0 0; padding-left: 20px;">
+                            <li>Return to the registration page</li>
+                            <li>Enter this 6-digit code in the verification field</li>
+                            <li>Click "Verify & Complete Registration"</li>
+                        </ol>
+                    </div>
+                    
+                    <div class="warning">
+                        <strong>⚠️ Important:</strong> This code will expire in <strong>10 minutes</strong>. Do not share this code with anyone.
+                    </div>
+                    
+                    <p>If you didn't request this verification code, please ignore this email or contact our support team if you have concerns.</p>
+                    
+                    <div class="footer">
+                        <p><strong>Holy Event</strong><br>
+                        Parish Community Management System</p>
+                        <p style="margin-top: 10px; font-size: 12px;">
+                            This is an automated email. Please do not reply to this message.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>
+      `,
+      textContent: `Welcome to Holy Event, ${name}!
 
-    // Send email with comprehensive error handling
-    try {
-      await sendEmailWithBrevo(email, name.trim(), OTP_CODE);
-      console.log("✅ Email sent successfully to:", email);
-    } catch (emailError: any) {
-      console.error("❌ Failed to send email:", emailError);
+Your verification code is: ${otp}
+
+This code will expire in 10 minutes. Do not share this code with anyone.
+
+If you didn't request this verification code, please ignore this email.
+
+Holy Event - Parish Community Management System`
+    };
+
+    console.log("📨 Sending request to Brevo Transactional API...");
+    console.log("📧 Sending to:", email.toLowerCase().trim());
+    
+    const brevoResponse = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'api-key': brevoApiKey
+      },
+      body: JSON.stringify(brevoPayload)
+    });
+
+    const brevoData = await brevoResponse.json();
+
+    console.log("📨 Brevo API Response:", {
+      status: brevoResponse.status,
+      statusText: brevoResponse.statusText,
+      data: brevoData
+    });
+
+    if (!brevoResponse.ok) {
+      console.error('❌ Brevo API error:', brevoData);
       
-      // Detailed error logging
-      if (emailError.response) {
-        console.error("❌ Brevo Error Status:", emailError.response.statusCode);
-        console.error("❌ Brevo Error Body:", emailError.response.body);
+      let errorMessage = 'Failed to send verification email. Please try again.';
+      
+      if (brevoResponse.status === 401) {
+        errorMessage = 'Email service authentication failed. Please contact support.';
+      } else if (brevoResponse.status === 402) {
+        errorMessage = 'Email service limit reached. Please contact support.';
+      } else if (brevoResponse.status === 400) {
+        const detailedError = brevoData.message || JSON.stringify(brevoData);
+        errorMessage = `Invalid email request: ${detailedError}`;
+        console.error('Detailed 400 error:', detailedError);
+      } else if (brevoData.message) {
+        errorMessage = `Email service error: ${brevoData.message}`;
       }
       
-      // Return user-friendly error
-      let errorMessage = "Failed to send verification email. Please try again.";
-      let statusCode = 500;
-      
-      if (emailError.response?.statusCode === 403) {
-        errorMessage = "Email service configuration error. Please contact support.";
-        statusCode = 403;
-      } else if (emailError.response?.statusCode === 401) {
-        errorMessage = "Email service authentication failed. Please contact support.";
-        statusCode = 401;
-      } else if (emailError.response?.statusCode === 400) {
-        errorMessage = "Invalid email address or configuration.";
-        statusCode = 400;
-      }
-      
       return NextResponse.json(
-        { 
-          error: errorMessage,
-          details: process.env.NODE_ENV === 'development' ? emailError.message : undefined
-        },
-        { status: statusCode }
+        { error: errorMessage, details: brevoData },
+        { status: brevoResponse.status }
       );
     }
 
-    // Success response
+    console.log('✅ Brevo email sent successfully. Message ID:', brevoData.messageId);
+
     return NextResponse.json({
       success: true,
-      message: "OTP sent successfully",
       otpHash,
       expiresAt,
-      debugOtp: process.env.NODE_ENV === 'development' ? OTP_CODE : undefined,
+      messageId: brevoData.messageId
     });
 
   } catch (error: any) {
@@ -128,134 +255,10 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json(
       { 
-        error: "An unexpected error occurred. Please try again.",
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        error: error.message || "Failed to process request. Please try again.",
+        details: error.toString()
       },
       { status: 500 }
     );
-  }
-}
-
-function generateOTP(): string {
-  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-    const array = new Uint32Array(1);
-    crypto.getRandomValues(array);
-    return ((array[0] % 900000) + 100000).toString();
-  }
-  return Math.floor(100000 + Math.random() * 900000).toString();
-}
-
-async function sendEmailWithBrevo(email: string, name: string, otp: string): Promise<void> {
-  console.log("📤 Preparing to send email via Brevo...");
-  
-  // Validate environment variables
-  if (!process.env.BREVO_API_KEY) {
-    throw new Error("BREVO_API_KEY not configured");
-  }
-  
-  if (!process.env.BREVO_SENDER_EMAIL) {
-    throw new Error("BREVO_SENDER_EMAIL not configured");
-  }
-
-  const apiInstance = new SibApiV3Sdk.TransactionalEmailsApi();
-
-  try {
-    // Set API key
-    const apiKey = process.env.BREVO_API_KEY;
-    apiInstance.setApiKey(
-      SibApiV3Sdk.TransactionalEmailsApiApiKeys.apiKey, 
-      apiKey
-    );
-
-    console.log("🔑 API key configured");
-    console.log("📧 Sending to:", email);
-
-    const SENDER_EMAIL = process.env.BREVO_SENDER_EMAIL;
-    const SENDER_NAME = process.env.BREVO_SENDER_NAME || "HolyEvent";
-    
-    const emailData = {
-      subject: `Your HolyEvent Verification Code: ${otp}`,
-      sender: {
-        name: SENDER_NAME,
-        email: SENDER_EMAIL,
-      },
-      to: [{ email: email.toLowerCase(), name }],
-      htmlContent: `
-<!DOCTYPE html>
-<html>
-<body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f4f4;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:20px;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);">
-          <!-- Header -->
-          <tr>
-            <td style="background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);padding:30px;text-align:center;">
-              <h1 style="color:#fff;margin:0;font-size:28px;">⛪ HolyEvent</h1>
-              <p style="color:#fff;margin:5px 0 0 0;font-size:14px;opacity:0.9;">Parish Community</p>
-            </td>
-          </tr>
-          
-          <!-- Content -->
-          <tr>
-            <td style="padding:40px 30px;">
-              <h2 style="color:#333;margin:0 0 20px 0;">Hi ${name}!</h2>
-              <p style="color:#666;font-size:16px;margin:0 0 10px 0;">
-                Thank you for registering with HolyEvent Parish Community.
-              </p>
-              <p style="color:#666;font-size:16px;margin:0 0 20px 0;">
-                Your email verification code is:
-              </p>
-              
-              <!-- OTP Code Box -->
-              <div style="background:#f8f9fa;border:2px dashed #667eea;border-radius:8px;padding:20px;text-align:center;margin:20px 0;">
-                <span style="font-size:36px;font-weight:bold;color:#667eea;letter-spacing:8px;">${otp}</span>
-              </div>
-              
-              <!-- Instructions -->
-              <div style="background:#fff3cd;border-left:4px solid #ffc107;padding:15px;margin:20px 0;">
-                <p style="color:#856404;font-size:14px;margin:0;">
-                  <strong>⏱️ Important:</strong><br/>
-                  This code expires in <strong>10 minutes</strong>.<br/>
-                  Do not share this code with anyone.
-                </p>
-              </div>
-              
-              <p style="color:#666;font-size:14px;margin:20px 0 0 0;">
-                If you didn't request this code, please ignore this email.
-              </p>
-            </td>
-          </tr>
-          
-          <!-- Footer -->
-          <tr>
-            <td style="background:#f9fafb;padding:20px 30px;text-align:center;border-top:1px solid #e5e7eb;">
-              <p style="color:#999;font-size:12px;margin:0;">
-                © ${new Date().getFullYear()} HolyEvent Parish Community<br/>
-                This is an automated message, please do not reply.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`.trim(),
-    };
-
-    console.log("📤 Sending email via Brevo API...");
-
-    const result = await apiInstance.sendTransacEmail(emailData);
-    
-    console.log("✅ Brevo API Success:", result.response?.statusCode);
-
-  } catch (err: any) {
-    console.error("❌ Brevo send error details:");
-    console.error("  Status:", err.statusCode || err.response?.statusCode);
-    console.error("  Message:", err.message);
-    console.error("  Response:", err.response?.body || err.response?.text);
-    
-    throw err;
   }
 }

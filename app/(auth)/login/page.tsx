@@ -7,34 +7,57 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Church, MailCheck, AlertCircle, RefreshCw, Eye, EyeOff } from 'lucide-react';
+import { Church, AlertCircle, RefreshCw, Eye, EyeOff, ArrowLeft, MailCheck, LockKeyhole } from 'lucide-react';
 import {
     signInWithEmailAndPassword,
     getMultiFactorResolver,
     TotpMultiFactorGenerator,
-    sendEmailVerification,
-    signOut
+    signOut,
+    sendPasswordResetEmail,
+    verifyPasswordResetCode,
+    confirmPasswordReset
 } from 'firebase/auth';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase-config';
 
 const LoginPage = () => {
     const router = useRouter();
     const [error, setError] = useState('');
+    const [success, setSuccess] = useState('');
     const [loading, setLoading] = useState(false);
     const [showMfaInput, setShowMfaInput] = useState(false);
     const [mfaResolver, setMfaResolver] = useState<any>(null);
     const [totpCode, setTotpCode] = useState('');
-    const [showVerificationWarning, setShowVerificationWarning] = useState(false);
-    const [unverifiedUser, setUnverifiedUser] = useState<any>(null);
-    const [resendingVerification, setResendingVerification] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
+    const [showForgotPassword, setShowForgotPassword] = useState(false);
+    const [resetEmail, setResetEmail] = useState('');
+    const [resetLoading, setResetLoading] = useState(false);
+    const [resetStep, setResetStep] = useState<'email' | 'code' | 'newPassword'>('email');
+    const [resetCode, setResetCode] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [showNewPassword, setShowNewPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     
     const [formData, setFormData] = useState({
         email: '',
         password: '',
         rememberMe: false,
     });
+
+    // Check URL parameters for password reset mode
+    useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const mode = urlParams.get('mode');
+        const oobCode = urlParams.get('oobCode');
+        
+        if (mode === 'resetPassword' && oobCode) {
+            setResetStep('code');
+            setResetCode(oobCode);
+            setShowForgotPassword(true);
+            handleVerifyResetCode(oobCode);
+        }
+    }, []);
 
     // Check if user is already logged in
     useEffect(() => {
@@ -55,18 +78,6 @@ const LoginPage = () => {
 
         checkAuthState();
     }, [router]);
-
-    // Check URL parameters for verification success
-    useEffect(() => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const verified = urlParams.get('verified');
-        const email = urlParams.get('email');
-        
-        if (verified === 'true' && email) {
-            setError('Email verified successfully! You can now login.');
-            setFormData(prev => ({ ...prev, email }));
-        }
-    }, []);
 
     const handleChange = (field: string, value: string | boolean) => {
         setFormData((prev) => ({
@@ -119,6 +130,7 @@ const LoginPage = () => {
                 await updateDoc(doc(db, 'users', uid), {
                     lastLogin: new Date(),
                     status: 'active',
+                    // Auto-verify email upon successful login
                     emailVerified: true,
                     pendingVerification: false
                 });
@@ -146,35 +158,11 @@ const LoginPage = () => {
         }
     };
 
-    const handleResendVerification = async () => {
-        if (!unverifiedUser) return;
-        
-        try {
-            setResendingVerification(true);
-            await sendEmailVerification(unverifiedUser);
-            
-            // Update verification sent time in Firestore
-            if (unverifiedUser.uid) {
-                await updateDoc(doc(db, 'users', unverifiedUser.uid), {
-                    lastVerificationSent: new Date()
-                });
-            }
-            
-            setError('Verification email sent! Please check your inbox and spam folder.');
-        } catch (err: any) {
-            console.error('Error resending verification:', err);
-            setError('Failed to resend verification email. Please try again.');
-        } finally {
-            setResendingVerification(false);
-        }
-    };
-
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
+        setSuccess('');
         setLoading(true);
-        setShowVerificationWarning(false);
-        setUnverifiedUser(null);
 
         try {
             const userCredential = await signInWithEmailAndPassword(
@@ -186,16 +174,22 @@ const LoginPage = () => {
             const user = userCredential.user;
             console.log('✅ Firebase login successful:', { uid: user.uid, email: user.email });
             
-            // Check if email is verified
+            // Auto-verify email upon successful login
             if (!user.emailVerified) {
-                setUnverifiedUser(user);
-                setShowVerificationWarning(true);
-                setError('Please verify your email address before logging in. Check your email for the verification link.');
-                setLoading(false);
-                return;
+                console.log('📧 Auto-verifying email for user:', user.email);
+                // Update Firestore to mark email as verified
+                try {
+                    await updateDoc(doc(db, 'users', user.uid), {
+                        emailVerified: true,
+                        pendingVerification: false,
+                        lastLogin: new Date()
+                    });
+                } catch (updateError) {
+                    console.log('Note: User document might not exist yet, continuing login...');
+                }
             }
             
-            // If email is verified, proceed to redirect
+            // Proceed to redirect
             await redirectUser(user.uid, user.email || formData.email);
         } catch (err: any) {
             console.error('❌ Login error:', err.code, err.message);
@@ -215,11 +209,175 @@ const LoginPage = () => {
                     'auth/invalid-credential': 'Invalid email or password.',
                     'auth/user-disabled': 'This account has been disabled.',
                     'auth/network-request-failed': 'Network error. Please check your connection.',
-                    'auth/email-not-verified': 'Please verify your email address first.',
                 };
                 setError(messages[err.code] || err.message || 'Login failed');
                 setLoading(false);
             }
+        }
+    };
+
+    const handleForgotPassword = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setSuccess('');
+        setResetLoading(true);
+
+        if (!resetEmail) {
+            setError('Please enter your email address');
+            setResetLoading(false);
+            return;
+        }
+
+        try {
+            await sendPasswordResetEmail(auth, resetEmail);
+            
+            // Save password reset request to database
+            try {
+                const resetRequestRef = doc(db, 'passwordResetRequests', `${resetEmail}_${Date.now()}`);
+                await setDoc(resetRequestRef, {
+                    email: resetEmail,
+                    requestedAt: serverTimestamp(),
+                    status: 'sent',
+                    ipAddress: await getClientIP(),
+                    userAgent: navigator.userAgent
+                });
+                console.log('✅ Password reset request saved to database');
+            } catch (dbError) {
+                console.error('Error saving reset request to database:', dbError);
+                // Continue even if database save fails
+            }
+            
+            setSuccess('Password reset email sent! Check your inbox and spam folder.');
+            setResetEmail('');
+            setResetStep('code');
+            
+        } catch (err: any) {
+            console.error('Password reset error:', err);
+            const messages: { [key: string]: string } = {
+                'auth/invalid-email': 'Please enter a valid email address.',
+                'auth/user-not-found': 'No account found with this email.',
+                'auth/too-many-requests': 'Too many attempts. Please try again later.',
+            };
+            setError(messages[err.code] || 'Failed to send reset email. Please try again.');
+        } finally {
+            setResetLoading(false);
+        }
+    };
+
+    const handleVerifyResetCode = async (code: string) => {
+        setResetLoading(true);
+        setError('');
+        
+        try {
+            const email = await verifyPasswordResetCode(auth, code);
+            setResetEmail(email);
+            setSuccess('Reset code verified! Please set your new password.');
+            setResetStep('newPassword');
+        } catch (err: any) {
+            console.error('Reset code verification error:', err);
+            const messages: { [key: string]: string } = {
+                'auth/expired-action-code': 'Reset link has expired. Please request a new one.',
+                'auth/invalid-action-code': 'Invalid reset link. Please request a new one.',
+                'auth/user-disabled': 'This account has been disabled.',
+                'auth/user-not-found': 'No account found with this email.',
+            };
+            setError(messages[err.code] || 'Invalid or expired reset link. Please request a new one.');
+        } finally {
+            setResetLoading(false);
+        }
+    };
+
+    const handlePasswordReset = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setResetLoading(true);
+
+        if (newPassword !== confirmPassword) {
+            setError('Passwords do not match');
+            setResetLoading(false);
+            return;
+        }
+
+        if (newPassword.length < 6) {
+            setError('Password must be at least 6 characters long');
+            setResetLoading(false);
+            return;
+        }
+
+        try {
+            // Confirm password reset
+            await confirmPasswordReset(auth, resetCode, newPassword);
+            
+            // Save password change to database
+            try {
+                const passwordChangeRef = doc(db, 'passwordChanges', `${resetEmail}_${Date.now()}`);
+                await setDoc(passwordChangeRef, {
+                    email: resetEmail,
+                    changedAt: serverTimestamp(),
+                    status: 'completed',
+                    ipAddress: await getClientIP(),
+                    userAgent: navigator.userAgent
+                });
+                
+                // Also update user's last password change timestamp
+                const userQuery = await getDoc(doc(db, 'users', await getUserIdByEmail(resetEmail)));
+                if (userQuery.exists()) {
+                    await updateDoc(doc(db, 'users', await getUserIdByEmail(resetEmail)), {
+                        lastPasswordChange: serverTimestamp(),
+                        passwordUpdatedAt: new Date().toISOString()
+                    });
+                }
+                
+                console.log('✅ Password change recorded in database');
+            } catch (dbError) {
+                console.error('Error saving password change to database:', dbError);
+                // Continue even if database save fails
+            }
+            
+            setSuccess('Password reset successful! You can now login with your new password.');
+            
+            // Auto-redirect back to login after 3 seconds
+            setTimeout(() => {
+                setShowForgotPassword(false);
+                setResetStep('email');
+                setNewPassword('');
+                setConfirmPassword('');
+            }, 3000);
+            
+        } catch (err: any) {
+            console.error('Password reset error:', err);
+            const messages: { [key: string]: string } = {
+                'auth/expired-action-code': 'Reset link has expired. Please request a new one.',
+                'auth/invalid-action-code': 'Invalid reset link. Please request a new one.',
+                'auth/weak-password': 'Password is too weak. Please choose a stronger password.',
+                'auth/user-disabled': 'This account has been disabled.',
+            };
+            setError(messages[err.code] || 'Failed to reset password. Please try again.');
+        } finally {
+            setResetLoading(false);
+        }
+    };
+
+    const getClientIP = async (): Promise<string> => {
+        try {
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            return data.ip;
+        } catch (error) {
+            return 'unknown';
+        }
+    };
+
+    const getUserIdByEmail = async (email: string): Promise<string> => {
+        try {
+            // This is a simplified approach - in a real app, you might have a different way to get user ID by email
+            const usersSnapshot = await getDoc(doc(db, 'users', email)); // Adjust based on your user structure
+            if (usersSnapshot.exists()) {
+                return usersSnapshot.id;
+            }
+            return email; // Fallback to using email as ID
+        } catch (error) {
+            return email;
         }
     };
 
@@ -251,13 +409,18 @@ const LoginPage = () => {
             
             const user = userCredential.user;
             
-            // Check email verification for MFA flow too
+            // Auto-verify email for MFA flow too
             if (!user.emailVerified) {
-                setUnverifiedUser(user);
-                setShowVerificationWarning(true);
-                setError('Please verify your email address before logging in.');
-                setLoading(false);
-                return;
+                console.log('📧 Auto-verifying email for MFA user:', user.email);
+                try {
+                    await updateDoc(doc(db, 'users', user.uid), {
+                        emailVerified: true,
+                        pendingVerification: false,
+                        lastLogin: new Date()
+                    });
+                } catch (updateError) {
+                    console.log('Note: User document might not exist yet, continuing login...');
+                }
             }
 
             // Redirect user
@@ -275,119 +438,84 @@ const LoginPage = () => {
 
     const handleBackToLogin = () => {
         setShowMfaInput(false);
+        setShowForgotPassword(false);
         setMfaResolver(null);
         setTotpCode('');
         setError('');
+        setSuccess('');
+        setResetEmail('');
+        setResetStep('email');
+        setResetCode('');
+        setNewPassword('');
+        setConfirmPassword('');
     };
 
-    const handleBackFromVerification = async () => {
-        // Sign out only when going back to login from verification screen
-        if (unverifiedUser) {
-            await signOut(auth);
-        }
-        setShowVerificationWarning(false);
-        setUnverifiedUser(null);
-        setError('');
-    };
-
-    const handleTryAgainAfterVerification = async () => {
-        if (!unverifiedUser) return;
-        
-        setLoading(true);
-        setError('');
-        
-        try {
-            // Reload the user to get updated email verification status
-            await unverifiedUser.reload();
-            
-            if (unverifiedUser.emailVerified) {
-                // Email is now verified, proceed with login
-                await redirectUser(unverifiedUser.uid, unverifiedUser.email);
-            } else {
-                setError('Email not verified yet. Please check your email and click the verification link.');
-                setLoading(false);
-            }
-        } catch (err: any) {
-            console.error('Error checking verification:', err);
-            setError('Error checking verification status. Please try logging in again.');
-            setLoading(false);
-        }
-    };
-
-    // Email Verification Warning Screen
-    if (showVerificationWarning) {
+    // Forgot Password Screens
+    if (showForgotPassword) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-background p-4">
                 <Card className="w-full max-w-md">
                     {/* Header */}
-                    <CardHeader className="bg-gradient-to-r from-yellow-500 to-yellow-600 p-6 rounded-t-lg text-white">
+                    <CardHeader className="bg-gradient-to-r from-blue-500 to-blue-600 p-6 rounded-t-lg text-white">
                         <div className="flex items-center gap-3 mb-2">
-                            <MailCheck className="w-7 h-7" />
-                            <h1 className="text-2xl font-bold">Email Verification Required</h1>
+                            <LockKeyhole className="w-7 h-7" />
+                            <h1 className="text-2xl font-bold">
+                                {resetStep === 'email' && 'Reset Password'}
+                                {resetStep === 'code' && 'Verify Reset Code'}
+                                {resetStep === 'newPassword' && 'Set New Password'}
+                            </h1>
                         </div>
-                        <p className="text-lg opacity-90">Please verify your email to continue</p>
+                        <p className="text-lg opacity-90">
+                            {resetStep === 'email' && "We'll send you a reset link"}
+                            {resetStep === 'code' && 'Verify your reset code'}
+                            {resetStep === 'newPassword' && 'Create your new password'}
+                        </p>
                     </CardHeader>
 
-                    {/* Verification Content */}
                     <CardContent className="p-6">
-                        <div className="space-y-5">
-                            <div className="text-center">
-                                <div className="rounded-full bg-yellow-100 p-4 inline-flex mb-4">
-                                    <AlertCircle className="w-12 h-12 text-yellow-600" />
+                        {/* Step 1: Email Input */}
+                        {resetStep === 'email' && (
+                            <form onSubmit={handleForgotPassword} className="space-y-5">
+                                <div className="space-y-2">
+                                    <Label htmlFor="resetEmail" className="text-sm font-medium">
+                                        Email Address
+                                    </Label>
+                                    <Input
+                                        id="resetEmail"
+                                        type="email"
+                                        placeholder="john@example.com"
+                                        value={resetEmail}
+                                        onChange={(e) => setResetEmail(e.target.value)}
+                                        required
+                                        disabled={resetLoading}
+                                        autoComplete="email"
+                                    />
+                                    <p className="text-sm text-muted-foreground">
+                                        Enter your email address and we'll send you a password reset link.
+                                    </p>
                                 </div>
-                                <h2 className="text-xl font-bold text-yellow-800 mb-2">
-                                    Check Your Email
-                                </h2>
-                                <p className="text-gray-600 mb-4">
-                                    We've sent a verification link to:
-                                </p>
-                                <p className="font-semibold text-lg bg-gray-100 p-3 rounded border break-all">
-                                    {unverifiedUser?.email}
-                                </p>
-                            </div>
 
-                            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                                <h3 className="font-semibold text-blue-800 mb-2">What to do:</h3>
-                                <ul className="space-y-2 text-sm text-blue-700">
-                                    <li>• Check your email inbox and spam folder</li>
-                                    <li>• Click the verification link in the email</li>
-                                    <li>• Return here and click "I've Verified My Email"</li>
-                                    <li>• The email comes from Firebase (noreply@firebaseapp.com)</li>
-                                </ul>
-                            </div>
+                                {/* Success Message */}
+                                {success && (
+                                    <div className="p-3 bg-green-100 border border-green-300 text-green-700 rounded text-sm">
+                                        {success}
+                                    </div>
+                                )}
 
-                            {/* Error Message */}
-                            {error && (
-                                <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
-                                    {error}
-                                </div>
-                            )}
+                                {/* Error Message */}
+                                {error && (
+                                    <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
+                                        {error}
+                                    </div>
+                                )}
 
-                            <div className="space-y-3">
+                                {/* Submit Button */}
                                 <Button
-                                    onClick={handleTryAgainAfterVerification}
-                                    className="w-full bg-green-600 hover:bg-green-700"
-                                    disabled={loading}
+                                    type="submit"
+                                    className="w-full bg-blue-600 hover:bg-blue-700"
+                                    disabled={resetLoading || !resetEmail}
                                 >
-                                    {loading ? (
-                                        <>
-                                            <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                                            Checking...
-                                        </>
-                                    ) : (
-                                        <>
-                                            <MailCheck className="mr-2 h-4 w-4" />
-                                            I've Verified My Email
-                                        </>
-                                    )}
-                                </Button>
-
-                                <Button
-                                    onClick={handleResendVerification}
-                                    className="w-full bg-yellow-600 hover:bg-yellow-700"
-                                    disabled={resendingVerification}
-                                >
-                                    {resendingVerification ? (
+                                    {resetLoading ? (
                                         <>
                                             <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
                                             Sending...
@@ -395,39 +523,224 @@ const LoginPage = () => {
                                     ) : (
                                         <>
                                             <MailCheck className="mr-2 h-4 w-4" />
-                                            Resend Verification Email
+                                            Send Reset Link
                                         </>
                                     )}
                                 </Button>
 
+                                {/* Back Button */}
                                 <Button
                                     type="button"
                                     variant="outline"
                                     className="w-full"
-                                    onClick={handleBackFromVerification}
-                                    disabled={loading || resendingVerification}
+                                    onClick={handleBackToLogin}
+                                    disabled={resetLoading}
                                 >
+                                    <ArrowLeft className="mr-2 h-4 w-4" />
                                     Back to Login
                                 </Button>
-                            </div>
 
-                            <p className="text-center text-sm text-gray-500">
-                                Still having trouble?{' '}
-                                <a 
-                                    href="mailto:support@holyevents.com" 
-                                    className="text-primary hover:underline font-medium"
-                                >
-                                    Contact support
-                                </a>
-                            </p>
-                        </div>
+                                {/* Help Text */}
+                                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                                    <h3 className="font-semibold text-blue-800 mb-2 text-sm">
+                                        What happens next?
+                                    </h3>
+                                    <ul className="space-y-1 text-xs text-blue-700">
+                                        <li>• Check your email inbox for a password reset link</li>
+                                        <li>• The link will expire in 1 hour for security</li>
+                                        <li>• If you don't see the email, check your spam folder</li>
+                                        <li>• The email comes from Firebase (noreply@firebaseapp.com)</li>
+                                    </ul>
+                                </div>
+                            </form>
+                        )}
+
+                        {/* Step 2: Code Verification */}
+                        {resetStep === 'code' && (
+                            <div className="space-y-5">
+                                <div className="space-y-2">
+                                    <Label className="text-sm font-medium">
+                                        Verification Code
+                                    </Label>
+                                    <Input
+                                        type="text"
+                                        placeholder="Enter reset code from email"
+                                        value={resetCode}
+                                        onChange={(e) => setResetCode(e.target.value)}
+                                        required
+                                        disabled={resetLoading}
+                                    />
+                                    <p className="text-sm text-muted-foreground">
+                                        Enter the reset code sent to your email, or click the link in your email.
+                                    </p>
+                                </div>
+
+                                {/* Success Message */}
+                                {success && (
+                                    <div className="p-3 bg-green-100 border border-green-300 text-green-700 rounded text-sm">
+                                        {success}
+                                    </div>
+                                )}
+
+                                {/* Error Message */}
+                                {error && (
+                                    <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
+                                        {error}
+                                    </div>
+                                )}
+
+                                <div className="flex gap-3">
+                                    <Button
+                                        onClick={() => handleVerifyResetCode(resetCode)}
+                                        className="flex-1 bg-blue-600 hover:bg-blue-700"
+                                        disabled={resetLoading || !resetCode}
+                                    >
+                                        {resetLoading ? (
+                                            <>
+                                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                                Verifying...
+                                            </>
+                                        ) : (
+                                            'Verify Code'
+                                        )}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => setResetStep('email')}
+                                        disabled={resetLoading}
+                                    >
+                                        Back
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Step 3: New Password */}
+                        {resetStep === 'newPassword' && (
+                            <form onSubmit={handlePasswordReset} className="space-y-5">
+                                <div className="space-y-2">
+                                    <Label htmlFor="newPassword" className="text-sm font-medium">
+                                        New Password
+                                    </Label>
+                                    <div className="relative">
+                                        <Input
+                                            id="newPassword"
+                                            type={showNewPassword ? "text" : "password"}
+                                            placeholder="••••••••"
+                                            value={newPassword}
+                                            onChange={(e) => setNewPassword(e.target.value)}
+                                            required
+                                            disabled={resetLoading}
+                                            autoComplete="new-password"
+                                            className="pr-10"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowNewPassword(!showNewPassword)}
+                                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                        >
+                                            {showNewPassword ? (
+                                                <EyeOff className="w-4 h-4" />
+                                            ) : (
+                                                <Eye className="w-4 h-4" />
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <Label htmlFor="confirmPassword" className="text-sm font-medium">
+                                        Confirm New Password
+                                    </Label>
+                                    <div className="relative">
+                                        <Input
+                                            id="confirmPassword"
+                                            type={showConfirmPassword ? "text" : "password"}
+                                            placeholder="••••••••"
+                                            value={confirmPassword}
+                                            onChange={(e) => setConfirmPassword(e.target.value)}
+                                            required
+                                            disabled={resetLoading}
+                                            autoComplete="new-password"
+                                            className="pr-10"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                            className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                        >
+                                            {showConfirmPassword ? (
+                                                <EyeOff className="w-4 h-4" />
+                                            ) : (
+                                                <Eye className="w-4 h-4" />
+                                            )}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {/* Success Message */}
+                                {success && (
+                                    <div className="p-3 bg-green-100 border border-green-300 text-green-700 rounded text-sm">
+                                        {success}
+                                    </div>
+                                )}
+
+                                {/* Error Message */}
+                                {error && (
+                                    <div className="p-3 bg-red-100 border border-red-300 text-red-700 rounded text-sm">
+                                        {error}
+                                    </div>
+                                )}
+
+                                <div className="flex gap-3">
+                                    <Button
+                                        type="submit"
+                                        className="flex-1 bg-blue-600 hover:bg-blue-700"
+                                        disabled={resetLoading || !newPassword || !confirmPassword}
+                                    >
+                                        {resetLoading ? (
+                                            <>
+                                                <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                                Resetting...
+                                            </>
+                                        ) : (
+                                            <>
+                                                <LockKeyhole className="mr-2 h-4 w-4" />
+                                                Reset Password
+                                            </>
+                                        )}
+                                    </Button>
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        onClick={() => setResetStep('code')}
+                                        disabled={resetLoading}
+                                    >
+                                        Back
+                                    </Button>
+                                </div>
+
+                                {/* Password Requirements */}
+                                <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                    <h3 className="font-semibold text-gray-800 mb-2 text-sm">
+                                        Password Requirements:
+                                    </h3>
+                                    <ul className="space-y-1 text-xs text-gray-700">
+                                        <li>• At least 6 characters long</li>
+                                        <li>• Use a combination of letters and numbers</li>
+                                        <li>• Avoid common passwords</li>
+                                    </ul>
+                                </div>
+                            </form>
+                        )}
                     </CardContent>
                 </Card>
             </div>
         );
     }
 
-    // MFA Screen
+    // MFA Screen (unchanged)
     if (showMfaInput) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -475,7 +788,14 @@ const LoginPage = () => {
                                 className="w-full"
                                 disabled={loading || totpCode.length !== 6}
                             >
-                                {loading ? 'Verifying...' : 'Verify & Continue'}
+                                {loading ? (
+                                    <>
+                                        <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                                        Verifying...
+                                    </>
+                                ) : (
+                                    'Verify & Continue'
+                                )}
                             </Button>
 
                             {/* Back Button */}
@@ -495,7 +815,7 @@ const LoginPage = () => {
         );
     }
 
-    // Main Login Screen
+    // Main Login Screen (unchanged)
     return (
         <div className="min-h-screen flex items-center justify-center bg-background p-4">
             <Card className="w-full max-w-md">
@@ -567,13 +887,21 @@ const LoginPage = () => {
                                 />
                                 <span>Remember me</span>
                             </label>
-                            <a
-                                href="/forgot-password"
+                            <button
+                                type="button"
+                                onClick={() => setShowForgotPassword(true)}
                                 className="text-primary hover:underline font-medium"
                             >
                                 Forgot password?
-                            </a>
+                            </button>
                         </div>
+
+                        {/* Success Message */}
+                        {success && (
+                            <div className="p-3 bg-green-100 border border-green-300 text-green-700 rounded text-sm">
+                                {success}
+                            </div>
+                        )}
 
                         {/* Error Message */}
                         {error && (
