@@ -2,8 +2,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { 
@@ -14,14 +12,12 @@ import {
   CheckCircle,
   XCircle,
   CalendarDays,
-  RefreshCw,
-  Eye,
-  EyeOff
+  RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
 import { db } from '@/lib/firebase-config';
-import { collection, query, where, orderBy, onSnapshot, Timestamp, addDoc, getDocs } from 'firebase/firestore';
+import { collection, query, where, orderBy, onSnapshot, Timestamp, addDoc } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 interface Appointment {
@@ -62,33 +58,15 @@ interface UserData {
   phone: string;
 }
 
-// Helper functions for user identification - IMPROVED
+// Helper functions for user identification
 const getUserId = (): string | null => {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('church_userId');
+  return localStorage.getItem('church_appointment_userId');
 };
 
 const getUserEmail = (): string | null => {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('church_userEmail');
-};
-
-const getUserData = (): UserData | null => {
-  if (typeof window === 'undefined') return null;
-  const stored = localStorage.getItem('church_userData');
-  return stored ? JSON.parse(stored) : null;
-};
-
-// Clear all user data on logout
-const clearUserData = (): void => {
-  if (typeof window === 'undefined') return;
-  localStorage.removeItem('church_userId');
-  localStorage.removeItem('church_userEmail');
-  localStorage.removeItem('church_userData');
-  localStorage.removeItem('userRole');
-  localStorage.removeItem('authToken');
-  localStorage.removeItem('appointments');
-  localStorage.removeItem('churchEvents');
+  return localStorage.getItem('church_appointment_userEmail');
 };
 
 // Helper function to format event type
@@ -124,7 +102,7 @@ const convertTimestampToISO = (timestamp: any): string => {
   return new Date().toISOString();
 };
 
-// Function to add sample events to Firebase
+// Function to add sample events to Firebase (for testing/initial setup)
 const addSampleEventsToFirebase = async () => {
   try {
     const sampleEvents = [
@@ -132,7 +110,7 @@ const addSampleEventsToFirebase = async () => {
         type: 'mass',
         title: 'Sunday Holy Mass',
         description: 'Regular Sunday mass with the parish community',
-        date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 2 days from now
         time: '08:00',
         location: 'Main Church',
         priest: 'Fr. John Smith',
@@ -145,10 +123,23 @@ const addSampleEventsToFirebase = async () => {
         type: 'wedding',
         title: 'Wedding Ceremony',
         description: 'Wedding of Maria Santos and Juan Dela Cruz',
-        date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        date: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 5 days from now
         time: '14:00',
         location: 'Main Church',
         priest: 'Fr. Michael Johnson',
+        status: 'active',
+        isPublic: true,
+        postedAt: Timestamp.now(),
+        createdAt: Timestamp.now()
+      },
+      {
+        type: 'baptism',
+        title: 'Infant Baptism',
+        description: 'Baptism ceremony for newborn children',
+        date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // 7 days from now
+        time: '10:00',
+        location: 'Baptistry',
+        priest: 'Fr. John Smith',
         status: 'active',
         isPublic: true,
         postedAt: Timestamp.now(),
@@ -160,6 +151,7 @@ const addSampleEventsToFirebase = async () => {
     
     for (const event of sampleEvents) {
       await addDoc(eventsCollection, event);
+      console.log('✅ Added sample event:', event.title);
     }
     
     return true;
@@ -169,171 +161,6 @@ const addSampleEventsToFirebase = async () => {
   }
 };
 
-// Login Component
-const LoginForm = ({ onLogin }: { onLogin: (userData: UserData) => void }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const { toast } = useToast();
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-
-    try {
-      // Basic validation
-      if (!email || !password) {
-        toast({
-          title: 'Missing Information',
-          description: 'Please enter both email and password.',
-          variant: 'destructive',
-        });
-        setLoading(false);
-        return;
-      }
-
-      // Check if user exists in Firebase
-      const usersQuery = query(
-        collection(db, 'users'),
-        where('email', '==', email.toLowerCase().trim())
-      );
-
-      const querySnapshot = await getDocs(usersQuery);
-      
-      if (querySnapshot.empty) {
-        toast({
-          title: 'User Not Found',
-          description: 'No account found with this email. Please sign up first.',
-          variant: 'destructive',
-        });
-        setLoading(false);
-        return;
-      }
-
-      // For demo purposes, we'll accept any password
-      // In a real app, you would verify the password hash
-      const userDoc = querySnapshot.docs[0];
-      const userData = userDoc.data();
-
-      // Create user session
-      const userSession: UserData = {
-        name: userData.name || email.split('@')[0],
-        email: email.toLowerCase().trim(),
-        phone: userData.phone || '+639171234567'
-      };
-
-      // Save to localStorage
-      localStorage.setItem('church_userId', userDoc.id);
-      localStorage.setItem('church_userEmail', userSession.email);
-      localStorage.setItem('church_userData', JSON.stringify(userSession));
-      localStorage.setItem('userRole', 'parishioner');
-      localStorage.setItem('authToken', `demo-token-${Date.now()}`);
-
-      toast({
-        title: 'Login Successful!',
-        description: `Welcome back, ${userSession.name}!`,
-      });
-
-      onLogin(userSession);
-
-    } catch (error) {
-      console.error('Login error:', error);
-      toast({
-        title: 'Login Failed',
-        description: 'An error occurred during login. Please try again.',
-        variant: 'destructive',
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
-      <Card className="w-full max-w-md mx-4">
-        <CardHeader className="text-center">
-          <div className="flex justify-center mb-4">
-            <Church className="w-12 h-12 text-primary" />
-          </div>
-          <CardTitle className="text-2xl">Welcome Back</CardTitle>
-          <CardDescription>
-            Sign in to your parish account
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email Address</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                disabled={loading}
-              />
-            </div>
-            
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder="Enter your password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  disabled={loading}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="absolute right-0 top-0 h-full px-3 py-2 hover:bg-transparent"
-                  onClick={() => setShowPassword(!showPassword)}
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            <Button 
-              type="submit" 
-              className="w-full" 
-              disabled={loading}
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Signing In...
-                </>
-              ) : (
-                'Sign In'
-              )}
-            </Button>
-          </form>
-
-          <div className="mt-6 text-center">
-            <p className="text-sm text-muted-foreground">
-              Don't have an account?{' '}
-              <Link href="/signup" className="text-primary hover:underline">
-                Sign up
-              </Link>
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-};
-
 export default function ClientDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<ChurchEvent[]>([]);
@@ -341,43 +168,59 @@ export default function ClientDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [showLogin, setShowLogin] = useState<boolean>(false);
   const { toast } = useToast();
   const router = useRouter();
 
-  // Check authentication on component mount
+  // Real-time Firestore listeners
   useEffect(() => {
-    const checkAuth = () => {
+    const checkAuthentication = () => {
+      // Mas maluwag na authentication check para sa events
       const userId = getUserId();
       const userEmail = getUserEmail();
-      const storedUserData = getUserData();
-
-      if (userId && userEmail && storedUserData) {
-        setUserData(storedUserData);
-        setIsAuthenticated(true);
-        setShowLogin(false);
-      } else {
+      
+      if (!userId || !userEmail) {
         setIsAuthenticated(false);
-        setShowLogin(true);
-        clearUserData(); // Clear any corrupted data
+        router.push('/login?redirect=' + encodeURIComponent('/c/dashboard'));
+        return false;
       }
+      
+      setIsAuthenticated(true);
+      return true;
     };
 
-    checkAuth();
-  }, []);
-
-  // Real-time Firestore listeners - ONLY when authenticated
-  useEffect(() => {
-    if (!isAuthenticated || !userData) return;
+    if (!checkAuthentication()) {
+      return;
+    }
 
     const initializeDashboard = async () => {
       try {
         setLoading(true);
+        
         const userId = getUserId();
+        const userEmail = getUserEmail();
+        
+        if (!userId || !userEmail) {
+          toast({
+            title: 'Authentication Required',
+            description: 'Please log in again.',
+            variant: 'destructive',
+          });
+          router.push('/login');
+          return;
+        }
+
+        // Get user data
+        const currentUser: UserData = {
+          name: userEmail.split('@')[0] || 'Parishioner',
+          email: userEmail,
+          phone: '+639171234567'
+        };
+
+        setUserData(currentUser);
 
         console.log('🔄 Setting up real-time listeners...');
 
-        // REAL-TIME LISTENER FOR APPOINTMENTS
+        // REAL-TIME LISTENER FOR APPOINTMENTS (User-specific)
         const appointmentsQuery = query(
           collection(db, 'appointments'),
           where('userId', '==', userId),
@@ -409,18 +252,47 @@ export default function ClientDashboardPage() {
             });
             
             console.log('📊 Real-time appointments update:', userAppointments.length);
+            
+            // Update localStorage with latest appointments
             localStorage.setItem('appointments', JSON.stringify(userAppointments));
-            setAppointments(userAppointments.slice(0, 3));
+            
+            // Show only latest 3 appointments for dashboard
+            const latestAppointments = userAppointments.slice(0, 3);
+            setAppointments(latestAppointments);
+            
+            // Show toast for status changes
+            userAppointments.forEach(apt => {
+              if (apt.status === 'approved') {
+                const wasPending = appointments.find(oldApt => 
+                  oldApt.id === apt.id && oldApt.status === 'pending'
+                );
+                
+                if (wasPending) {
+                  toast({
+                    title: 'Appointment Approved! 🎉',
+                    description: `Your ${formatEventType(apt.eventType)} on ${formatDate(apt.eventDate)} has been approved.`,
+                  });
+                }
+              }
+            });
           },
           (error) => {
             console.error('❌ Firestore appointments error:', error);
+            toast({
+              title: 'Connection Issue',
+              description: 'Using cached appointments data.',
+              variant: 'destructive',
+            });
             loadAppointmentsFromLocalStorage();
           }
         );
 
-        // REAL-TIME LISTENER FOR CHURCH EVENTS
+        // REAL-TIME LISTENER FOR CHURCH EVENTS (Public - dapat makita ng lahat ng users)
         const setupEventsListener = () => {
+          console.log('🎯 Setting up PUBLIC real-time events listener...');
+          
           try {
+            // SIMPLIFIED QUERY: Kunin lang ang active at public events
             const eventsQuery = query(
               collection(db, 'events'),
               where('status', '==', 'active'),
@@ -430,6 +302,8 @@ export default function ClientDashboardPage() {
             const eventsUnsubscribe = onSnapshot(
               eventsQuery, 
               (querySnapshot) => {
+                console.log('📡 Real-time PUBLIC events update:', querySnapshot.size, 'events');
+                
                 const churchEvents: ChurchEvent[] = [];
                 const now = new Date();
                 
@@ -441,6 +315,8 @@ export default function ClientDashboardPage() {
                     const eventDateObj = new Date(eventDate);
                     const isFutureEvent = eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
                     
+                    // TANGGALIN ANG isPublic CHECK PARA MAKITA NG LAHAT
+                    // if (isFutureEvent && data.isPublic !== false) {
                     if (isFutureEvent) {
                       churchEvents.push({
                         id: doc.id,
@@ -464,11 +340,16 @@ export default function ClientDashboardPage() {
                 });
                 
                 if (churchEvents.length > 0) {
+                  console.log(`✅ Loaded ${churchEvents.length} PUBLIC events`);
+                  
+                  // Sort by date and get upcoming 3 events
                   const sortedEvents = churchEvents
                     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
                     .slice(0, 3);
                   
                   setUpcomingEvents(sortedEvents);
+                  
+                  // Save to localStorage as backup
                   localStorage.setItem('churchEvents', JSON.stringify(churchEvents.map(event => ({
                     ...event,
                     postedAt: convertTimestampToISO(event.postedAt),
@@ -477,12 +358,51 @@ export default function ClientDashboardPage() {
                   }))));
                   
                 } else {
-                  console.log('📭 No upcoming events found');
+                  console.log('📭 No upcoming PUBLIC events found');
+                  
+                  // Try to add sample events if no events exist
+                  const initializeSampleEvents = async () => {
+                    console.log('🆕 Initializing sample events...');
+                    const success = await addSampleEventsToFirebase();
+                    if (success) {
+                      toast({
+                        title: 'Sample Events Added',
+                        description: 'Sample church events have been added to the database.',
+                      });
+                    }
+                  };
+                  
+                  // Auto-create sample events if none exist
+                  initializeSampleEvents();
                   loadEventsFromLocalStorage();
                 }
               },
               (error) => {
-                console.error('❌ Events listener error:', error);
+                console.error('❌ PUBLIC Events listener error:', error);
+                
+                // Try to create the events collection with sample data
+                if (error.code === 'failed-precondition' || error.code === 'not-found') {
+                  console.log('🆕 Events collection might not exist, attempting to create with sample data...');
+                  
+                  const createSampleEvents = async () => {
+                    const success = await addSampleEventsToFirebase();
+                    if (success) {
+                      toast({
+                        title: 'Events Collection Created',
+                        description: 'Sample events have been added to the database.',
+                      });
+                    } else {
+                      toast({
+                        title: 'Events Not Available',
+                        description: 'Please check if the events collection exists in Firebase.',
+                        variant: 'destructive',
+                      });
+                    }
+                  };
+                  
+                  createSampleEvents();
+                }
+                
                 loadEventsFromLocalStorage();
               }
             );
@@ -490,13 +410,15 @@ export default function ClientDashboardPage() {
             return eventsUnsubscribe;
             
           } catch (error) {
-            console.error('❌ Cannot setup events listener:', error);
+            console.error('❌ Cannot setup PUBLIC events listener:', error);
             loadEventsFromLocalStorage();
             return () => {};
           }
         };
 
+        // Setup real-time events listener
         const eventsUnsubscribe = setupEventsListener();
+
         setLoading(false);
 
         return () => {
@@ -507,6 +429,11 @@ export default function ClientDashboardPage() {
 
       } catch (error) {
         console.error('❌ Error initializing dashboard:', error);
+        toast({
+          title: 'Initialization Error',
+          description: 'Loading cached data...',
+          variant: 'destructive',
+        });
         loadAppointmentsFromLocalStorage();
         loadEventsFromLocalStorage();
         setLoading(false);
@@ -514,7 +441,7 @@ export default function ClientDashboardPage() {
     };
 
     initializeDashboard();
-  }, [isAuthenticated, userData]);
+  }, [toast, router]);
 
   const loadAppointmentsFromLocalStorage = () => {
     try {
@@ -524,10 +451,12 @@ export default function ClientDashboardPage() {
         const userId = getUserId();
         const userEmail = getUserEmail();
         
+        // Filter appointments for current user
         const userAppointments = allAppointments.filter((apt: Appointment) => 
           apt.userId === userId || apt.email === userEmail
         );
         
+        console.log('📱 Loaded appointments from localStorage:', userAppointments.length);
         setAppointments(userAppointments.slice(0, 3));
       } else {
         setAppointments([]);
@@ -555,7 +484,10 @@ export default function ClientDashboardPage() {
           .slice(0, 3);
         
         setUpcomingEvents(futureEvents);
+        console.log('📱 Loaded events from localStorage:', futureEvents.length);
       } else {
+        console.log('📱 No events in localStorage, using sample events');
+        // Create sample events for display
         const sampleEvents: ChurchEvent[] = [
           {
             id: '1',
@@ -577,26 +509,6 @@ export default function ClientDashboardPage() {
       console.error('Error loading events from localStorage:', error);
       setUpcomingEvents([]);
     }
-  };
-
-  const handleLoginSuccess = (userData: UserData) => {
-    setUserData(userData);
-    setIsAuthenticated(true);
-    setShowLogin(false);
-  };
-
-  const handleLogout = () => {
-    clearUserData();
-    setUserData(null);
-    setIsAuthenticated(false);
-    setShowLogin(true);
-    setAppointments([]);
-    setUpcomingEvents([]);
-    
-    toast({
-      title: 'Logged Out',
-      description: 'You have been successfully logged out.',
-    });
   };
 
   const getStatusBadge = (status: string) => {
@@ -656,9 +568,11 @@ export default function ClientDashboardPage() {
   const handleRefreshData = async () => {
     setRefreshing(true);
     try {
+      // Clear current data
       setAppointments([]);
       setUpcomingEvents([]);
       
+      // Reload from localStorage first for immediate response
       loadAppointmentsFromLocalStorage();
       loadEventsFromLocalStorage();
       
@@ -666,6 +580,9 @@ export default function ClientDashboardPage() {
         title: 'Refreshing Data',
         description: 'Checking for latest updates...',
       });
+      
+      // The real-time listeners will automatically update the data
+      // from Firestore when they reconnect
       
     } catch (error) {
       console.error('Error refreshing data:', error);
@@ -680,11 +597,6 @@ export default function ClientDashboardPage() {
   };
 
   const upcomingAppointment = getUpcomingAppointment();
-
-  // Show login form if not authenticated
-  if (showLogin) {
-    return <LoginForm onLogin={handleLoginSuccess} />;
-  }
 
   if (!isAuthenticated) {
     return (
@@ -703,6 +615,7 @@ export default function ClientDashboardPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
           <p className="mt-4 text-muted-foreground">Loading your dashboard...</p>
+          <p className="text-sm text-muted-foreground mt-2">Setting up real-time updates</p>
         </div>
       </div>
     );
@@ -715,8 +628,8 @@ export default function ClientDashboardPage() {
           <Church className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
           <h2 className="text-2xl font-bold mb-2">User Not Found</h2>
           <p className="text-muted-foreground mb-4">Please log in to access your dashboard.</p>
-          <Button onClick={() => setShowLogin(true)}>
-            Go to Login
+          <Button asChild>
+            <Link href="/login">Go to Login</Link>
           </Button>
         </div>
       </div>
@@ -735,7 +648,7 @@ export default function ClientDashboardPage() {
                 Parishioner Dashboard
               </h1>
               <p className="mt-2 text-primary-foreground/80">
-                Welcome back, {userData.name}!
+                Welcome back, {userData.name}! We're glad to have you with us.
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -744,14 +657,6 @@ export default function ClientDashboardPage() {
                   {userData.name.split(' ').map(n => n[0]).join('')}
                 </AvatarFallback>
               </Avatar>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={handleLogout}
-                className="text-primary-foreground hover:bg-primary-foreground/20"
-              >
-                Logout
-              </Button>
             </div>
           </div>
         </div>
@@ -935,6 +840,7 @@ export default function ClientDashboardPage() {
                       <CalendarDays className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No upcoming events</p>
                       <p className="text-sm mt-2">New events will appear here automatically</p>
+                      <p className="text-xs mt-1">Public events for all users</p>
                     </div>
                   ) : (
                     upcomingEvents.map((event) => (
@@ -966,6 +872,11 @@ export default function ClientDashboardPage() {
                       </div>
                     ))
                   )}
+                </div>
+                <div className="mt-4 pt-4 border-t">
+                  <p className="text-xs text-muted-foreground text-center">
+                    🔄 Public events • Visible to all parishioners
+                  </p>
                 </div>
               </CardContent>
             </Card>
