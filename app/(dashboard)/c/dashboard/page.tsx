@@ -13,15 +13,12 @@ import {
   CheckCircle,
   XCircle,
   CalendarDays,
-  RefreshCw,
-  LogOut,
-  AlertTriangle
+  RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
-import { db, auth } from '@/lib/firebase-config';
-import { collection, query, where, orderBy, onSnapshot, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { db } from '@/lib/firebase-config';
+import { collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 interface Appointment {
@@ -73,11 +70,6 @@ const getUserEmail = (): string | null => {
   return localStorage.getItem('church_appointment_userEmail');
 };
 
-const getCurrentSessionId = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('currentSessionId');
-};
-
 // Helper function to format event type
 const formatEventType = (eventType: string): string => {
   const eventTypeMap: Record<string, string> = {
@@ -118,136 +110,16 @@ export default function ClientDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [sessionConflict, setSessionConflict] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const { toast } = useToast();
   const router = useRouter();
 
-  // Session conflict detection and forced logout
-  const handleForcedLogout = async () => {
-    try {
-      console.log('🚨 Starting forced logout due to session conflict...');
-      
-      // Clear all local storage
-      localStorage.removeItem('userRole');
-      localStorage.removeItem('authToken');
-      localStorage.removeItem('church_appointment_userId');
-      localStorage.removeItem('userEmail');
-      localStorage.removeItem('church_appointment_userEmail');
-      localStorage.removeItem('currentUser');
-      localStorage.removeItem('currentSessionId');
-      localStorage.removeItem('appointments');
-      localStorage.removeItem('churchEvents');
-      
-      // Sign out from Firebase
-      if (auth.currentUser) {
-        await signOut(auth);
-      }
-      
-      // Show conflict message - REMOVED DURATION PROPERTY
-      toast({
-        title: 'Session Conflict Detected',
-        description: 'Another user logged into this account. You have been signed out for security.',
-        variant: 'destructive',
-      });
-      
-      // Redirect to login page
-      setTimeout(() => {
-        setSessionConflict(false);
-        router.push('/login?session=conflict');
-      }, 3000);
-      
-    } catch (error) {
-      console.error('Error during forced logout:', error);
-      router.push('/login');
-    }
-  };
-
-  // Real-time session monitoring
-  useEffect(() => {
-    let unsubscribeUserListener: () => void = () => {};
-    let unsubscribeAuthListener: () => void = () => {};
-
-    const setupSessionMonitoring = async (user: any) => {
-      const userId = user.uid;
-      setCurrentUserId(userId);
-      
-      const userDocRef = doc(db, 'users', userId);
-      const currentSessionId = getCurrentSessionId();
-
-      console.log('🔐 Setting up session monitoring for user:', userId);
-      console.log('📱 Current session ID:', currentSessionId);
-
-      if (!currentSessionId) {
-        console.warn('⚠️ No session ID found in localStorage');
-        return;
-      }
-
-      // Listen for session changes in Firestore
-      unsubscribeUserListener = onSnapshot(userDocRef, (docSnapshot) => {
-        if (docSnapshot.exists()) {
-          const userData = docSnapshot.data();
-          const firestoreSessionId = userData.currentSessionId;
-          
-          console.log('🔄 Session check:', {
-            local: currentSessionId,
-            firestore: firestoreSessionId,
-            match: firestoreSessionId === currentSessionId
-          });
-
-          // Check if session has been invalidated (another login occurred)
-          if (firestoreSessionId && firestoreSessionId !== currentSessionId) {
-            console.log('🚨 SESSION CONFLICT DETECTED! Another user logged in.');
-            setSessionConflict(true);
-            
-            // Show immediate toast notification - REMOVED DURATION PROPERTY
-            toast({
-              title: 'Security Alert',
-              description: 'Another login detected from different device.',
-              variant: 'destructive',
-            });
-            
-            // Auto logout after short delay
-            setTimeout(() => {
-              handleForcedLogout();
-            }, 2000);
-          }
-        }
-      }, (error) => {
-        console.error('❌ Error monitoring user session:', error);
-      });
-    };
-
-    // Auth state listener
-    unsubscribeAuthListener = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        await setupSessionMonitoring(user);
-      } else {
-        // Clean up listeners when user logs out
-        unsubscribeUserListener();
-      }
-    });
-
-    return () => {
-      unsubscribeUserListener();
-      unsubscribeAuthListener();
-    };
-  }, [toast, router]);
-
   // Real-time Firestore listeners - READ ONLY
   useEffect(() => {
-    // Don't setup data listeners if session conflict is detected
-    if (sessionConflict) {
-      return;
-    }
-
     const checkAuthentication = () => {
       const userId = getUserId();
       const userEmail = getUserEmail();
-      const sessionId = getCurrentSessionId();
       
-      if (!userId || !userEmail || !sessionId) {
-        console.log('❌ Authentication missing:', { userId, userEmail, sessionId });
+      if (!userId || !userEmail) {
         setIsAuthenticated(false);
         router.push('/login?redirect=' + encodeURIComponent('/c/dashboard'));
         return false;
@@ -276,23 +148,6 @@ export default function ClientDashboardPage() {
           });
           router.push('/login');
           return;
-        }
-
-        // Verify session is still valid
-        try {
-          const userDoc = await getDoc(doc(db, 'users', userId));
-          if (userDoc.exists()) {
-            const userData = userDoc.data();
-            const currentSessionId = getCurrentSessionId();
-            
-            if (userData.currentSessionId && userData.currentSessionId !== currentSessionId) {
-              console.log('🚨 Session invalid on dashboard load');
-              setSessionConflict(true);
-              return;
-            }
-          }
-        } catch (error) {
-          console.error('Error verifying session:', error);
         }
 
         // Get user data
@@ -526,7 +381,7 @@ export default function ClientDashboardPage() {
     };
 
     initializeDashboard();
-  }, [toast, router, sessionConflict]);
+  }, [toast, router]);
 
   const loadAppointmentsFromLocalStorage = () => {
     try {
@@ -668,38 +523,7 @@ export default function ClientDashboardPage() {
     }
   };
 
-  // Session Conflict Modal
-  if (sessionConflict) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
-        <Card className="w-full max-w-md border-red-300 shadow-xl">
-          <CardHeader className="bg-red-500 p-6 rounded-t-lg text-white">
-            <div className="flex items-center gap-3 mb-2">
-              <AlertTriangle className="w-8 h-8" />
-              <div>
-                <CardTitle className="text-xl">Security Alert</CardTitle>
-                <CardDescription className="text-red-100">
-                  Multiple login detected
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-6 text-center">
-            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
-              <p className="font-semibold text-red-800 mb-2">Another login detected on your account</p>
-              <p className="text-sm text-red-700">
-                For security reasons, you are being signed out. This usually happens when you log in from another device or browser.
-              </p>
-            </div>
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500 mx-auto mb-4"></div>
-            <p className="text-sm text-muted-foreground">
-              Redirecting to login page...
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  const upcomingAppointment = getUpcomingAppointment();
 
   if (!isAuthenticated) {
     return (
@@ -739,8 +563,6 @@ export default function ClientDashboardPage() {
     );
   }
 
-  const upcomingAppointment = getUpcomingAppointment();
-
   return (
     <div className="min-h-screen bg-gradient-to-b from-primary/5 via-background to-background">
       {/* Header */}
@@ -757,13 +579,6 @@ export default function ClientDashboardPage() {
               </p>
             </div>
             <div className="flex items-center gap-4">
-              <div className="text-right">
-                <p className="font-medium">{userData.name}</p>
-                <p className="text-sm text-primary-foreground/80">{userData.email}</p>
-                <Badge variant="secondary" className="mt-1 text-xs">
-                  🔐 Secure Session
-                </Badge>
-              </div>
               <Avatar className="ring-4 ring-background">
                 <AvatarFallback>
                   {userData.name.split(' ').map(n => n[0]).join('')}
