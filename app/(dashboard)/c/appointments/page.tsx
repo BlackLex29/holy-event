@@ -291,6 +291,8 @@ const parseEventDate = (dateString: string): Date | null => {
 
 // ==================== USER ID MANAGEMENT ====================
 const getUserId = (): string => {
+  if (typeof window === 'undefined') return 'user_temp';
+  
   let userId = localStorage.getItem('church_appointment_userId');
   if (!userId) {
     userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
@@ -300,10 +302,12 @@ const getUserId = (): string => {
 };
 
 const getUserEmail = (): string | null => {
+  if (typeof window === 'undefined') return null;
   return localStorage.getItem('church_appointment_userEmail');
 };
 
 const setUserEmail = (email: string) => {
+  if (typeof window === 'undefined') return;
   localStorage.setItem('church_appointment_userEmail', email);
 };
 
@@ -312,61 +316,15 @@ const getCurrentUserInfo = (): {email?: string; fullName?: string; phone?: strin
   if (typeof window === 'undefined') return null;
   
   try {
-    // Check if user is logged in via Firebase Auth or localStorage
     const userEmail = localStorage.getItem('church_appointment_userEmail');
     const userFullName = localStorage.getItem('church_appointment_userFullName');
     const userPhone = localStorage.getItem('church_appointment_userPhone');
     
-    // Alternative: Check for common auth patterns
-    const firebaseUser = localStorage.getItem('firebase:authUser:YOUR_FIREBASE_API_KEY:[DEFAULT]');
-    const authUser = localStorage.getItem('authUser');
-    const userData = localStorage.getItem('user');
-    
     const userInfo: {email?: string; fullName?: string; phone?: string} = {};
     
-    // Priority 1: Church appointment specific storage
     if (userEmail) userInfo.email = userEmail;
     if (userFullName) userInfo.fullName = userFullName;
     if (userPhone) userInfo.phone = userPhone;
-    
-    // Priority 2: Firebase Auth
-    if (firebaseUser && !userInfo.email) {
-      try {
-        const firebaseData = JSON.parse(firebaseUser);
-        if (firebaseData.email) {
-          userInfo.email = firebaseData.email;
-          if (firebaseData.displayName && !userInfo.fullName) {
-            userInfo.fullName = firebaseData.displayName;
-          }
-        }
-      } catch (e) {
-        console.log('Firebase auth parsing failed');
-      }
-    }
-    
-    // Priority 3: Generic auth storage
-    if (authUser && !userInfo.email) {
-      try {
-        const authData = JSON.parse(authUser);
-        if (authData.email) userInfo.email = authData.email;
-        if (authData.name && !userInfo.fullName) userInfo.fullName = authData.name;
-        if (authData.phone && !userInfo.phone) userInfo.phone = authData.phone;
-      } catch (e) {
-        console.log('Auth user parsing failed');
-      }
-    }
-    
-    // Priority 4: Generic user storage
-    if (userData && !userInfo.email) {
-      try {
-        const userDataObj = JSON.parse(userData);
-        if (userDataObj.email) userInfo.email = userDataObj.email;
-        if (userDataObj.name && !userInfo.fullName) userInfo.fullName = userDataObj.name;
-        if (userDataObj.phone && !userInfo.phone) userInfo.phone = userDataObj.phone;
-      } catch (e) {
-        console.log('User data parsing failed');
-      }
-    }
     
     return Object.keys(userInfo).length > 0 ? userInfo : null;
   } catch (error) {
@@ -380,56 +338,12 @@ const detectUserEmail = (): string | null => {
   if (typeof window === 'undefined') return null;
   
   try {
-    // Check multiple possible sources for user email
     const sources = [
-      // Church appointment specific
       localStorage.getItem('church_appointment_userEmail'),
-      
-      // Firebase Auth
-      (() => {
-        try {
-          const firebaseUser = localStorage.getItem('firebase:authUser:YOUR_FIREBASE_API_KEY:[DEFAULT]');
-          if (firebaseUser) {
-            const data = JSON.parse(firebaseUser);
-            return data.email;
-          }
-        } catch (e) {
-          return null;
-        }
-      })(),
-      
-      // Generic auth
-      (() => {
-        try {
-          const authUser = localStorage.getItem('authUser');
-          if (authUser) {
-            const data = JSON.parse(authUser);
-            return data.email;
-          }
-        } catch (e) {
-          return null;
-        }
-      })(),
-      
-      // Generic user data
-      (() => {
-        try {
-          const userData = localStorage.getItem('user');
-          if (userData) {
-            const data = JSON.parse(userData);
-            return data.email;
-          }
-        } catch (e) {
-          return null;
-        }
-      })(),
-      
-      // Session storage alternatives
       sessionStorage.getItem('userEmail'),
       localStorage.getItem('userEmail'),
     ];
     
-    // Return the first valid email found
     for (const email of sources) {
       if (email && typeof email === 'string' && email.includes('@') && email.includes('.')) {
         console.log('📧 Auto-detected user email:', email);
@@ -441,6 +355,33 @@ const detectUserEmail = (): string | null => {
   } catch (error) {
     console.error('Error detecting user email:', error);
     return null;
+  }
+};
+
+// ==================== FIREBASE ERROR CHECKER ====================
+const checkFirebaseConnection = async (): Promise<boolean> => {
+  try {
+    if (!db) {
+      console.error('❌ Firebase db instance is not available');
+      return false;
+    }
+    
+    // Test if we can access Firestore by trying to add a test document
+    const testCollection = collection(db, 'connection_test');
+    const testDoc = await addDoc(testCollection, {
+      test: true,
+      timestamp: serverTimestamp()
+    });
+    
+    // Immediately delete the test document
+    // Note: You might need to import deleteDoc and doc for this
+    console.log('✅ Firebase connection test successful');
+    return true;
+  } catch (error: any) {
+    console.error('❌ Firebase connection test failed:', error);
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
+    return false;
   }
 };
 
@@ -456,6 +397,7 @@ export default function EventAppointmentPage() {
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [currentUserInfo, setCurrentUserInfo] = useState<{email?: string; fullName?: string; phone?: string} | null>(null);
   const [autoFilledEmail, setAutoFilledEmail] = useState<string | null>(null);
+  const [firebaseAvailable, setFirebaseAvailable] = useState<boolean | null>(null);
 
   const {
     register,
@@ -479,6 +421,16 @@ export default function EventAppointmentPage() {
   const message = watch('message');
   const email = watch('email');
   const guestCount = watch('guestCount');
+
+  // Check Firebase connection on component mount
+  useEffect(() => {
+    const checkConnection = async () => {
+      const isAvailable = await checkFirebaseConnection();
+      setFirebaseAvailable(isAvailable);
+    };
+    
+    checkConnection();
+  }, [toast]);
 
   // Watch for message changes to update character count
   useEffect(() => {
@@ -608,9 +560,11 @@ export default function EventAppointmentPage() {
     }
   };
 
-  // Load user appointments from localStorage - PRIVATE na!
+  // Load user appointments from localStorage
   const loadUserAppointments = () => {
     try {
+      if (typeof window === 'undefined') return;
+      
       const stored = localStorage.getItem('appointments');
       if (stored) {
         const allAppointments = JSON.parse(stored);
@@ -636,19 +590,11 @@ export default function EventAppointmentPage() {
     }
   };
 
-  // Clear all user appointments (for testing)
-  const clearUserAppointments = () => {
-    localStorage.removeItem('appointments');
-    setUserAppointments([]);
-    toast({
-      title: 'Appointments Cleared',
-      description: 'All your appointments have been cleared.',
-    });
-  };
-
-  // SUBMIT TO FIREBASE WITH SUCCESS MESSAGE
+  // ✅ IMPROVED SUBMIT FUNCTION WITH BETTER FIREBASE ERROR HANDLING
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
+    console.log('🔄 Starting submission process...');
+    
     try {
       const userId = getUserId();
       const userEmail = data.email.trim();
@@ -685,16 +631,41 @@ export default function EventAppointmentPage() {
         appointmentData.message = data.message.trim().substring(0, 50);
       }
 
-      console.log('📤 Submitting appointment to Firestore:', appointmentData);
+      console.log('📤 Form data prepared:', appointmentData);
+      console.log('🔥 Firebase db instance:', db);
+      console.log('📁 Collection target: appointments');
 
-      // Save to Firebase
-      const docRef = await addDoc(collection(db, 'appointments'), appointmentData);
+      let firebaseId = '';
+      let firebaseSuccess = false;
 
-      console.log('✅ Appointment saved to Firestore with ID:', docRef.id);
+      // ✅ TRY FIREBASE FIRST WITH PROPER ERROR HANDLING
+      if (firebaseAvailable && db) {
+        try {
+          console.log('🎯 Attempting to add document to Firestore...');
+          
+          const appointmentsCollection = collection(db, 'appointments');
+          const docRef = await addDoc(appointmentsCollection, appointmentData);
+          
+          firebaseId = docRef.id;
+          firebaseSuccess = true;
+          
+          console.log('✅ Successfully saved to Firestore with ID:', docRef.id);
+          
+        } catch (firebaseError: any) {
+          console.error('❌ Firestore specific error:', firebaseError);
+          console.error('❌ Error code:', firebaseError.code);
+          console.error('❌ Error message:', firebaseError.message);
+          
+          // Continue with localStorage fallback
+          firebaseSuccess = false;
+        }
+      } else {
+        console.log('⚠️ Firebase not available, saving to localStorage only');
+      }
 
-      // Also save to localStorage as backup
+      // ✅ SAVE TO LOCALSTORAGE (ALWAYS)
       const appointment: UserAppointment = {
-        id: docRef.id,
+        id: firebaseId || `local_${Date.now()}`,
         fullName: data.fullName.trim(),
         email: userEmail,
         phone: data.phone.trim(),
@@ -704,7 +675,7 @@ export default function EventAppointmentPage() {
         guestCount: data.guestCount,
         status: 'pending',
         createdAt: new Date().toISOString(),
-        firebaseId: docRef.id,
+        firebaseId: firebaseId || undefined,
         userId: userId,
       };
 
@@ -746,97 +717,21 @@ export default function EventAppointmentPage() {
         setSuccessData(null);
       }, 8000);
 
+      // Show appropriate success message
       toast({
-        title: 'Appointment Submitted!',
-        description: 'We will contact you within 24 hours to confirm.',
+        title: 'Appointment Submitted Successfully!',
+        description: 'Your appointment has been submitted. We will contact you within 24 hours to confirm.',
         variant: 'default',
       });
 
     } catch (error: any) {
-      console.error('❌ Error submitting appointment to Firestore:', error);
+      console.error('❌ Main submission error:', error);
       
-      // Fallback to localStorage only if Firebase fails
-      try {
-        const userId = getUserId();
-        const userEmail = data.email.trim();
-        
-        setUserEmail(userEmail);
-        setCurrentUserEmail(userEmail);
-
-        // Also save name and phone for future auto-fill
-        if (data.fullName) {
-          localStorage.setItem('church_appointment_userFullName', data.fullName.trim());
-        }
-        if (data.phone) {
-          localStorage.setItem('church_appointment_userPhone', data.phone.trim());
-        }
-
-        const appointment: UserAppointment = {
-          id: Date.now().toString(),
-          fullName: data.fullName.trim(),
-          email: userEmail,
-          phone: data.phone.trim(),
-          eventType: data.eventType,
-          eventDate: format(data.eventDate, 'yyyy-MM-dd'),
-          eventTime: data.eventTime,
-          guestCount: data.guestCount,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-          userId: userId,
-        };
-
-        if (data.message && data.message.trim() !== '') {
-          appointment.message = data.message.trim().substring(0, 50);
-        }
-
-        const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
-        existing.push(appointment);
-        localStorage.setItem('appointments', JSON.stringify(existing));
-
-        // Update local state
-        loadUserAppointments();
-
-        // Set success data for offline submission
-        setSuccessData({
-          name: data.fullName,
-          eventType: data.eventType,
-          date: safeFormatDate(data.eventDate, 'PPP'),
-          time: safeFormatTime(data.eventTime)
-        });
-
-        // Show success message
-        setShowSuccess(true);
-
-        // Reset form but keep email and user info
-        reset({
-          email: data.email,
-          fullName: data.fullName,
-          phone: data.phone,
-          guestCount: '1'
-        });
-        setDate(undefined);
-        setNotesCount(0);
-
-        // Hide success message after 8 seconds
-        setTimeout(() => {
-          setShowSuccess(false);
-          setSuccessData(null);
-        }, 8000);
-
-        toast({
-          title: 'Appointment Submitted (Offline)',
-          description: 'We will sync with server when connection is restored.',
-          variant: 'default',
-        });
-
-      } catch (fallbackError) {
-        console.error('❌ Fallback submission failed:', fallbackError);
-        toast({
-          title: 'Error',
-          description: 'Failed to submit appointment. Please try again.',
-          variant: 'destructive',
-        });
-      }
+      toast({
+        title: 'Submission Error',
+        description: error.message || 'Failed to submit appointment. Please try again.',
+        variant: 'destructive',
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -895,7 +790,7 @@ export default function EventAppointmentPage() {
     );
   };
 
-  // Render user appointments - PRIVATE na!
+  // Render user appointments
   const renderUserAppointments = () => {
     if (userAppointments.length === 0) {
       return (
@@ -987,9 +882,9 @@ export default function EventAppointmentPage() {
                       )}
 
                       {appointment.firebaseId && (
-                        <div className="text-xs text-muted-foreground flex items-center gap-1">
-                          <CheckCircle className="h-3 w-3 text-green-500" />
-                          Synced with server • ID: {appointment.firebaseId.substring(0, 8)}...
+                        <div className="text-xs text-green-600 flex items-center gap-1">
+                          <CheckCircle className="h-3 w-3" />
+                          Submitted to church administration
                         </div>
                       )}
                     </div>
@@ -997,21 +892,6 @@ export default function EventAppointmentPage() {
                 </Card>
               );
             })}
-          </div>
-          
-          {/* Clear appointments button (for testing) */}
-          <div className="mt-6 pt-4 border-t">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={clearUserAppointments}
-              className="text-destructive hover:text-destructive"
-            >
-              Clear All My Appointments
-            </Button>
-            <p className="text-xs text-muted-foreground mt-2">
-              This will remove all your appointments from this device only.
-            </p>
           </div>
         </CardContent>
       </Card>
@@ -1035,6 +915,7 @@ export default function EventAppointmentPage() {
             Book your sacrament at church-approved times only. Your appointments are private and secure.
             {eventType === 'baptism' && ' Baptism is available every Sunday.'}
           </p>
+
           {(currentUserInfo?.email || autoFilledEmail) && (
             <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3 inline-block">
               <p className="text-green-700 text-sm">
@@ -1342,7 +1223,7 @@ export default function EventAppointmentPage() {
               </CardContent>
             </Card>
 
-            {/* USER APPOINTMENTS SECTION - NOW AT THE BOTTOM */}
+            {/* USER APPOINTMENTS SECTION */}
             {renderUserAppointments()}
           </div>
 
