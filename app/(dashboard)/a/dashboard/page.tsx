@@ -7,17 +7,10 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Separator } from '@/components/ui/separator';
 import { 
-  Users, 
   Calendar, 
-  PlusCircle, 
-  Settings,
   Church,
-  Bell,
-  TrendingUp,
   Clock,
   UserCheck,
-  CheckCircle,
-  XCircle,
   RefreshCw
 } from 'lucide-react';
 import Link from 'next/link';
@@ -30,9 +23,8 @@ import {
   orderBy, 
   limit, 
   where,
-  updateDoc,
-  doc,
-  onSnapshot
+  onSnapshot,
+  Timestamp
 } from 'firebase/firestore';
 
 // Types for our data
@@ -51,7 +43,6 @@ interface Appointment {
 }
 
 interface DashboardStats {
-  totalParishioners: number;
   upcomingEvents: number;
   pendingAppointments: number;
   activeUsersToday: number;
@@ -60,7 +51,6 @@ interface DashboardStats {
 const AdminDashboardPage = () => {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [stats, setStats] = useState<DashboardStats>({
-    totalParishioners: 0,
     upcomingEvents: 0,
     pendingAppointments: 0,
     activeUsersToday: 0
@@ -131,120 +121,130 @@ const AdminDashboardPage = () => {
     try {
       setRefreshing(true);
 
-      // Fetch total parishioners (users)
-      const usersQuery = query(collection(db, 'users'));
-      const usersSnapshot = await getDocs(usersQuery);
-      const totalParishioners = usersSnapshot.size;
+      // Fetch ALL appointments first to debug
+      const allAppointmentsQuery = query(collection(db, 'appointments'));
+      const allAppointmentsSnapshot = await getDocs(allAppointmentsQuery);
+      console.log(`📋 Total appointments in database: ${allAppointmentsSnapshot.size}`);
+      
+      // Log all appointment statuses
+      const statusCounts: Record<string, number> = {};
+      allAppointmentsSnapshot.forEach(doc => {
+        const status = doc.data().status || 'no-status';
+        statusCounts[status] = (statusCounts[status] || 0) + 1;
+      });
+      console.log('📊 Appointments by status:', statusCounts);
 
       // Fetch pending appointments
-      const pendingQuery = query(
-        collection(db, 'appointments'),
-        where('status', '==', 'pending')
-      );
-      const pendingSnapshot = await getDocs(pendingQuery);
-      const pendingAppointments = pendingSnapshot.size;
+      let pendingAppointments = 0;
+      try {
+        const pendingQuery = query(
+          collection(db, 'appointments'),
+          where('status', '==', 'pending')
+        );
+        const pendingSnapshot = await getDocs(pendingQuery);
+        pendingAppointments = pendingSnapshot.size;
+        console.log(`⏳ Pending appointments: ${pendingAppointments}`);
+      } catch (error) {
+        console.error('Error fetching pending appointments:', error);
+        // Fallback: count manually
+        pendingAppointments = statusCounts['pending'] || 0;
+      }
 
-      // Fetch total appointments for today (for active users)
+      // Fetch total appointments for today
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-      const todayQuery = query(
-        collection(db, 'appointments'),
-        where('createdAt', '>=', today)
-      );
-      const todaySnapshot = await getDocs(todayQuery);
-      const activeUsersToday = todaySnapshot.size;
+      let activeUsersToday = 0;
+      
+      try {
+        const todayQuery = query(
+          collection(db, 'appointments'),
+          where('createdAt', '>=', Timestamp.fromDate(today))
+        );
+        const todaySnapshot = await getDocs(todayQuery);
+        activeUsersToday = todaySnapshot.size;
+        console.log(`👥 Today's appointments: ${activeUsersToday}`);
+      } catch (error) {
+        console.error('Error fetching today appointments:', error);
+        // Fallback: count manually
+        allAppointmentsSnapshot.forEach(doc => {
+          const data = doc.data();
+          if (data.createdAt) {
+            const createdDate = data.createdAt.toDate ? data.createdAt.toDate() : new Date(data.createdAt);
+            if (createdDate >= today) {
+              activeUsersToday++;
+            }
+          }
+        });
+      }
 
-      // Fetch upcoming events from multiple possible collections
+      // Fetch upcoming events
       let upcomingEvents = 0;
-      const eventCollections = ['events', 'churchevents', 'church_events'];
+      const eventCollections = ['events', 'churchevents', 'church_events', 'church-events'];
       
       for (const collectionName of eventCollections) {
         try {
-          const eventsQuery = query(
-            collection(db, collectionName),
-            where('status', '==', 'active')
-          );
-          const eventsSnapshot = await getDocs(eventsQuery);
+          console.log(`🔍 Checking '${collectionName}' collection...`);
+          const eventsCollectionRef = collection(db, collectionName);
+          const allEventsSnapshot = await getDocs(eventsCollectionRef);
           
-          const now = new Date();
-          const futureEvents = eventsSnapshot.docs.filter(doc => {
-            const data = doc.data();
-            const eventDate = data.date;
-            try {
-              const eventDateObj = new Date(eventDate);
-              return eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
-            } catch {
-              return false;
+          console.log(`📚 Total documents in '${collectionName}': ${allEventsSnapshot.size}`);
+          
+          if (allEventsSnapshot.size > 0) {
+            const now = new Date();
+            now.setHours(0, 0, 0, 0);
+            
+            // Check all documents and try different date field names
+            const futureEvents = allEventsSnapshot.docs.filter(doc => {
+              const data = doc.data();
+              
+              // Try different status values
+              const isActive = !data.status || data.status === 'active' || data.status === 'published';
+              
+              // Try different date field names
+              let eventDate = data.date || data.eventDate || data.startDate || data.start_date;
+              
+              if (!eventDate) {
+                console.log(`⚠️ No date field found for event ${doc.id}`);
+                return false;
+              }
+              
+              try {
+                const eventDateObj = new Date(eventDate);
+                const isFuture = eventDateObj >= now;
+                return isFuture && isActive;
+              } catch (error) {
+                console.error(`❌ Error parsing date for event ${doc.id}:`, error);
+                return false;
+              }
+            });
+            
+            if (futureEvents.length > 0) {
+              upcomingEvents = futureEvents.length;
+              console.log(`✅ Found ${upcomingEvents} upcoming events in '${collectionName}'`);
+              break;
             }
-          });
-          
-          if (futureEvents.length > 0) {
-            upcomingEvents = futureEvents.length;
-            console.log(`✅ Found ${upcomingEvents} upcoming events in ${collectionName}`);
-            break; // Use the first collection that has events
           }
         } catch (error) {
-          console.log(`ℹ️ No events found in ${collectionName} or collection doesn't exist`);
+          console.log(`ℹ️ Collection '${collectionName}' not found:`, error);
           continue;
         }
       }
 
-      setStats({
-        totalParishioners,
+      const newStats = {
         upcomingEvents,
         pendingAppointments,
         activeUsersToday
-      });
+      };
 
-      console.log('📊 Dashboard Stats Updated:', {
-        totalParishioners,
-        upcomingEvents,
-        pendingAppointments,
-        activeUsersToday
-      });
+      setStats(newStats);
+
+      console.log('📊 Final Dashboard Stats:', newStats);
 
     } catch (error) {
-      console.error('Error fetching stats:', error);
+      console.error('❌ Error fetching stats:', error);
       toast({
         title: 'Error',
         description: 'Failed to load statistics',
-        variant: 'destructive'
-      });
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  // Handle appointment actions
-  const handleAppointmentAction = async (appointmentId: string, action: 'approve' | 'reject') => {
-    try {
-      setRefreshing(true);
-      
-      // Update in Firebase
-      const appointmentRef = doc(db, 'appointments', appointmentId);
-      await updateDoc(appointmentRef, {
-        status: action === 'approve' ? 'approved' : 'rejected',
-        updatedAt: new Date()
-      });
-
-      // Update local state
-      setAppointments(prev => prev.map(apt => 
-        apt.id === appointmentId 
-          ? { ...apt, status: action === 'approve' ? 'approved' : 'rejected' }
-          : apt
-      ));
-
-      // Refresh stats
-      await fetchDashboardStats();
-
-      toast({
-        title: `Appointment ${action === 'approve' ? 'Approved' : 'Rejected'}`,
-        description: `The appointment has been ${action === 'approve' ? 'approved' : 'rejected'}.`,
-      });
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: `Failed to ${action} appointment`,
         variant: 'destructive'
       });
     } finally {
@@ -276,11 +276,15 @@ const AdminDashboardPage = () => {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    } catch {
+      return 'Invalid Date';
+    }
   };
 
   const formatEventType = (eventType: string): string => {
@@ -304,13 +308,17 @@ const AdminDashboardPage = () => {
 
   const formatDateTime = (timestamp: any) => {
     if (!timestamp) return 'N/A';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    try {
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch {
+      return 'Invalid Date';
+    }
   };
 
   if (loading) {
@@ -360,24 +368,8 @@ const AdminDashboardPage = () => {
       </div>
 
       <div className="container mx-auto px-6 py-8 -mt-6">
-        {/* Stats Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <Card className="border-l-4 border-l-primary shadow-lg">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                Total Parishioners
-              </CardTitle>
-              <Users className="w-5 h-5 text-primary" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stats.totalParishioners.toLocaleString()}</div>
-              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                <TrendingUp className="w-3 h-3 text-green-600" />
-                Registered members
-              </p>
-            </CardContent>
-          </Card>
-
+        {/* Stats Grid - 3 columns na lang */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <Card className="border-l-4 border-l-blue-500 shadow-lg">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -422,7 +414,7 @@ const AdminDashboardPage = () => {
 
         {/* Recent Activity */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Recent Appointments - REAL DATA FROM FIREBASE */}
+          {/* Recent Appointments - VIEW ONLY */}
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <div>
@@ -480,29 +472,6 @@ const AdminDashboardPage = () => {
                           )}
                         </div>
                       </div>
-                      
-                      {appointment.status === 'pending' && (
-                        <div className="flex gap-1 ml-4">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 w-8 p-0 text-green-600 hover:text-green-700 hover:bg-green-50"
-                            onClick={() => handleAppointmentAction(appointment.id, 'approve')}
-                            disabled={refreshing}
-                          >
-                            <CheckCircle className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 w-8 p-0 text-red-600 hover:text-red-700 hover:bg-red-50"
-                            onClick={() => handleAppointmentAction(appointment.id, 'reject')}
-                            disabled={refreshing}
-                          >
-                            <XCircle className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      )}
                     </div>
                   ))
                 )}
@@ -542,9 +511,9 @@ const AdminDashboardPage = () => {
                     </Badge>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-muted-foreground">Events Collection</span>
-                    <Badge variant="outline" className={stats.upcomingEvents > 0 ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}>
-                      {stats.upcomingEvents > 0 ? 'Active' : 'No Events'}
+                    <span className="text-sm text-muted-foreground">Appointments</span>
+                    <Badge variant="outline" className={stats.pendingAppointments > 0 ? "bg-yellow-100 text-yellow-800" : "bg-green-100 text-green-800"}>
+                      {stats.pendingAppointments > 0 ? `${stats.pendingAppointments} Pending` : 'All Processed'}
                     </Badge>
                   </div>
                 </div>
