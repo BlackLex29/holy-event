@@ -940,7 +940,7 @@ const LoginPage = () => {
                 </CardContent>
             </Card>
         </div>
-    );
+    );  
 };
 
 export default LoginPage;
