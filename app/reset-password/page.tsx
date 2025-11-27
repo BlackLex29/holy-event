@@ -54,18 +54,26 @@ function ResetPassContent() {
     };
 
     const validatePassword = (password: string) => {
-        const hasSpecialChar = /[@_-]/.test(password);
-        const hasSda = password.includes('sda');
+        const hasSpecialChar = /[@$!%*?&_-]/.test(password);
         const hasMinLength = password.length >= 8;
+        const hasUpperCase = /[A-Z]/.test(password);
+        const hasLowerCase = /[a-z]/.test(password);
+        const hasNumbers = /[0-9]/.test(password);
         
         if (!hasMinLength) {
             return 'Password must be at least 8 characters long.';
         }
-        if (!hasSpecialChar) {
-            return 'Password must contain at least one of these special characters: @, _, -';
+        if (!hasUpperCase) {
+            return 'Password must contain at least one uppercase letter.';
         }
-        if (!hasSda) {
-            return 'Password must contain "sda" in it.';
+        if (!hasLowerCase) {
+            return 'Password must contain at least one lowercase letter.';
+        }
+        if (!hasNumbers) {
+            return 'Password must contain at least one number.';
+        }
+        if (!hasSpecialChar) {
+            return 'Password must contain at least one special character: @$!%*?&_-';
         }
         return null;
     };
@@ -128,17 +136,21 @@ function ResetPassContent() {
 
     // Check password strength
     const getPasswordStrength = (password: string) => {
-        const hasSpecialChar = /[@_-]/.test(password);
-        const hasSda = password.includes('sda');
+        const hasSpecialChar = /[@$!%*?&_-]/.test(password);
         const hasMinLength = password.length >= 8;
+        const hasUpperCase = /[A-Z]/.test(password);
+        const hasLowerCase = /[a-z]/.test(password);
+        const hasNumbers = /[0-9]/.test(password);
         
-        const requirementsMet = [hasMinLength, hasSpecialChar, hasSda].filter(Boolean).length;
+        const requirementsMet = [hasMinLength, hasUpperCase, hasLowerCase, hasNumbers, hasSpecialChar].filter(Boolean).length;
         return {
             strength: requirementsMet,
-            total: 3,
+            total: 5,
             hasSpecialChar,
-            hasSda,
-            hasMinLength
+            hasMinLength,
+            hasUpperCase,
+            hasLowerCase,
+            hasNumbers
         };
     };
 
@@ -228,7 +240,7 @@ function ResetPassContent() {
                                             <Input
                                                 id="password"
                                                 type={showPass ? "text" : "password"}
-                                                placeholder="Enter new password (must contain @, _, - and sda)"
+                                                placeholder="Enter new password"
                                                 value={formInfo.password}
                                                 onChange={(e) => handleChange('password', e.target.value)}
                                                 required
@@ -255,11 +267,17 @@ function ResetPassContent() {
                                             <div className={`flex items-center gap-2 ${passStrength.hasMinLength ? 'text-green-600' : 'text-gray-500'}`}>
                                                 {passStrength.hasMinLength ? '✓' : '○'} At least 8 characters
                                             </div>
-                                            <div className={`flex items-center gap-2 ${passStrength.hasSpecialChar ? 'text-green-600' : 'text-gray-500'}`}>
-                                                {passStrength.hasSpecialChar ? '✓' : '○'} Contains @, _, or -
+                                            <div className={`flex items-center gap-2 ${passStrength.hasUpperCase ? 'text-green-600' : 'text-gray-500'}`}>
+                                                {passStrength.hasUpperCase ? '✓' : '○'} At least one uppercase letter
                                             </div>
-                                            <div className={`flex items-center gap-2 ${passStrength.hasSda ? 'text-green-600' : 'text-gray-500'}`}>
-                                                {passStrength.hasSda ? '✓' : '○'} Contains "sda"
+                                            <div className={`flex items-center gap-2 ${passStrength.hasLowerCase ? 'text-green-600' : 'text-gray-500'}`}>
+                                                {passStrength.hasLowerCase ? '✓' : '○'} At least one lowercase letter
+                                            </div>
+                                            <div className={`flex items-center gap-2 ${passStrength.hasNumbers ? 'text-green-600' : 'text-gray-500'}`}>
+                                                {passStrength.hasNumbers ? '✓' : '○'} At least one number
+                                            </div>
+                                            <div className={`flex items-center gap-2 ${passStrength.hasSpecialChar ? 'text-green-600' : 'text-gray-500'}`}>
+                                                {passStrength.hasSpecialChar ? '✓' : '○'} At least one special character (@$!%*?&_-)
                                             </div>
                                         </div>
 
@@ -267,15 +285,17 @@ function ResetPassContent() {
                                         {formInfo.password && (
                                             <div className="mt-2">
                                                 <div className="flex gap-1 mb-1">
-                                                    {[1, 2, 3].map((index) => (
+                                                    {[1, 2, 3, 4, 5].map((index) => (
                                                         <div
                                                             key={index}
                                                             className={`h-2 flex-1 rounded ${
                                                                 index <= passStrength.strength
-                                                                    ? passStrength.strength === 3
+                                                                    ? passStrength.strength >= 4
                                                                         ? 'bg-green-500'
-                                                                        : passStrength.strength === 2
+                                                                        : passStrength.strength >= 3
                                                                         ? 'bg-yellow-500'
+                                                                        : passStrength.strength >= 2
+                                                                        ? 'bg-orange-500'
                                                                         : 'bg-red-500'
                                                                     : 'bg-gray-200'
                                                             }`}
@@ -283,7 +303,7 @@ function ResetPassContent() {
                                                     ))}
                                                 </div>
                                                 <p className="text-xs text-gray-500">
-                                                    Password strength: {passStrength.strength}/3
+                                                    Password strength: {passStrength.strength}/5
                                                 </p>
                                             </div>
                                         )}
@@ -324,7 +344,7 @@ function ResetPassContent() {
                                     <Button
                                         type="submit"
                                         className="w-full bg-sky-600 hover:bg-sky-700 text-white"
-                                        disabled={loadState || !formInfo.password || !formInfo.confirmPass || passStrength.strength < 3}
+                                        disabled={loadState || !formInfo.password || !formInfo.confirmPass || passStrength.strength < 5}
                                     >
                                         {loadState ? (
                                             <>

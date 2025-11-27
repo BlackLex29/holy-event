@@ -276,7 +276,7 @@ const AdminSettingsPage = () => {
         <div className="container max-w-4xl py-8">
             {/* Header with Title Only - Logout Button Removed */}
             <div className="mb-8">
-                <h1 className="text-3xl font-bold">Admin Settings</h1>
+                <h1 className="text-3xl font-bold">User Settings</h1>
             </div>
 
             {error && (

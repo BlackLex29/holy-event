@@ -203,25 +203,6 @@ const LoginPage = () => {
         }
     };
 
-    // Check if user is already logged in
-    useEffect(() => {
-        const checkAuthState = () => {
-            const userRole = localStorage.getItem('userRole');
-            const authToken = localStorage.getItem('authToken');
-            const userId = localStorage.getItem('church_appointment_userId');
-            
-            if (userRole && authToken && userId) {
-                if (userRole === 'admin') {
-                    router.push('/a/dashboard');
-                } else {
-                    router.push('/c/dashboard');
-                }
-            }
-        };
-
-        checkAuthState();
-    }, [router]);
-
     const handleChange = (field: string, value: string | boolean) => {
         setFormData((prev) => ({
             ...prev,
@@ -403,14 +384,13 @@ const LoginPage = () => {
         }
     };
 
-    // FIXED: Corrected the userData variable name
     const redirectUser = async (uid: string, email: string) => {
         try {
             const userDoc = await getDoc(doc(db, 'users', uid));
             let role = 'client';
             
             if (userDoc.exists()) {
-                const userData = userDoc.data(); // FIXED: Changed from userData.data() to userDoc.data()
+                const userData = userDoc.data();
                 role = userData.role || 'client';
                 
                 await updateDoc(doc(db, 'users', uid), {
@@ -512,60 +492,61 @@ const LoginPage = () => {
     };
 
     // IMPROVED FORGOT PASSWORD FUNCTION WITH RESET LINK
-const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    setResetLoading(true);
+    const handleForgotPassword = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setError('');
+        setSuccess('');
+        setResetLoading(true);
 
-    if (!resetEmail) {
-        setError('Please enter your email address');
-        setResetLoading(false);
-        return;
-    }
-
-    try {
-        // Set the custom reset URL
-        const actionCodeSettings = {
-            url: `https://holy-event.vercel.app/reset-password`,
-            handleCodeInApp: true
-        };
-
-        // Send password reset email with custom URL
-        await sendPasswordResetEmail(auth, resetEmail, actionCodeSettings);
-        
-        // Save reset request to database
-        try {
-            const resetRequestRef = doc(db, 'passwordResetRequests', `${resetEmail}_${Date.now()}`);
-            await setDoc(resetRequestRef, {
-                email: resetEmail,
-                requestedAt: serverTimestamp(),
-                status: 'sent',
-                ipAddress: clientIP,
-                userAgent: navigator.userAgent,
-                resetUrl: actionCodeSettings.url
-            });
-            console.log('✅ Password reset request saved to database');
-        } catch (dbError) {
-            console.error('Error saving reset request to database:', dbError);
+        if (!resetEmail) {
+            setError('Please enter your email address');
+            setResetLoading(false);
+            return;
         }
-        
-        // Mark as email sent
-        setEmailSent(true);
-        setSuccess(`Password reset email sent to ${resetEmail}! Please check your inbox AND spam folder. Click the link in the email to set your new password.`);
-        
-    } catch (err: any) {
-        console.error('Password reset error:', err);
-        const messages: { [key: string]: string } = {
-            'auth/invalid-email': 'Please enter a valid email address.',
-            'auth/user-not-found': 'No account found with this email.',
-            'auth/too-many-requests': 'Too many attempts. Please try again later.',
-        };
-        setError(messages[err.code] || 'Failed to send reset email. Please try again.');
-    } finally {
-        setResetLoading(false);
-    }
-};
+
+        try {
+            // Set the custom reset URL
+            const actionCodeSettings = {
+                url: `https://holy-event.vercel.app/reset-password`,
+                handleCodeInApp: true
+            };
+
+            // Send password reset email with custom URL
+            await sendPasswordResetEmail(auth, resetEmail, actionCodeSettings);
+            
+            // Save reset request to database
+            try {
+                const resetRequestRef = doc(db, 'passwordResetRequests', `${resetEmail}_${Date.now()}`);
+                await setDoc(resetRequestRef, {
+                    email: resetEmail,
+                    requestedAt: serverTimestamp(),
+                    status: 'sent',
+                    ipAddress: clientIP,
+                    userAgent: navigator.userAgent,
+                    resetUrl: actionCodeSettings.url
+                });
+                console.log('✅ Password reset request saved to database');
+            } catch (dbError) {
+                console.error('Error saving reset request to database:', dbError);
+            }
+            
+            // Mark as email sent
+            setEmailSent(true);
+            setSuccess(`Password reset email sent to ${resetEmail}! Please check your inbox AND spam folder. Click the link in the email to set your new password.`);
+            
+        } catch (err: any) {
+            console.error('Password reset error:', err);
+            const messages: { [key: string]: string } = {
+                'auth/invalid-email': 'Please enter a valid email address.',
+                'auth/user-not-found': 'No account found with this email.',
+                'auth/too-many-requests': 'Too many attempts. Please try again later.',
+            };
+            setError(messages[err.code] || 'Failed to send reset email. Please try again.');
+        } finally {
+            setResetLoading(false);
+        }
+    };
+
     // NEW FUNCTION: Handle back to login from forgot password
     const handleBackToLoginFromForgot = () => {
         setShowForgotPassword(false);
