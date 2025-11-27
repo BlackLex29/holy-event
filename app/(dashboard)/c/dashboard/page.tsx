@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -516,6 +516,8 @@ export default function ClientDashboardPage() {
 
   // Get only 3 appointments for display in dashboard
   const displayAppointments = appointments.slice(0, 3);
+  // Get only 3 events for display in dashboard
+  const displayEvents = upcomingEvents.slice(0, 3);
 
   if (!isAuthenticated) {
     return (
@@ -676,11 +678,9 @@ export default function ClientDashboardPage() {
                     Your recent sacrament requests • Updates in real-time
                   </CardDescription>
                 </div>
-                <Button asChild variant="outline" size="sm">
-                  <Link href="/c/appointments">
-                    View All ({appointments.length})
-                  </Link>
-                </Button>
+                <div className="text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
+                  Total: {appointments.length}
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4 max-h-[400px] overflow-y-auto">
@@ -740,15 +740,13 @@ export default function ClientDashboardPage() {
                     Public events for everyone • Updates automatically
                   </CardDescription>
                 </div>
-                <Button asChild variant="outline" size="sm">
-                  <Link href="/c/events">
-                    View All ({upcomingEvents.length})
-                  </Link>
-                </Button>
+                <div className="text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
+                  Total: {upcomingEvents.length}
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="space-y-4 max-h-[400px] overflow-y-auto">
-                  {upcomingEvents.length === 0 ? (
+                  {displayEvents.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <CalendarDays className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No upcoming events</p>
@@ -756,7 +754,7 @@ export default function ClientDashboardPage() {
                       <p className="text-xs mt-1">Public events for all users</p>
                     </div>
                   ) : (
-                    upcomingEvents.map((event) => (
+                    displayEvents.map((event) => (
                       <div key={event.id} className="flex items-start justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted/70 transition-colors border">
                         <div className="flex-1">
                           <p className="font-medium">{event.title}</p>
