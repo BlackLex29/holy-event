@@ -53,7 +53,7 @@ const LoginPage = () => {
     const [showForgotPassword, setShowForgotPassword] = useState(false);
     const [resetEmail, setResetEmail] = useState('');
     const [resetLoading, setResetLoading] = useState(false);
-    const [emailSent, setEmailSent] = useState(false);
+    const [emailSent, setEmailSent] = useState(false); // NEW: Track if email has been sent
     
     // Brute force protection state
     const [failedAttempts, setFailedAttempts] = useState(0);
@@ -202,6 +202,25 @@ const LoginPage = () => {
             countdownRef.current = null;
         }
     };
+
+    // Check if user is already logged in
+    useEffect(() => {
+        const checkAuthState = () => {
+            const userRole = localStorage.getItem('userRole');
+            const authToken = localStorage.getItem('authToken');
+            const userId = localStorage.getItem('church_appointment_userId');
+            
+            if (userRole && authToken && userId) {
+                if (userRole === 'admin') {
+                    router.push('/a/dashboard');
+                } else {
+                    router.push('/c/dashboard');
+                }
+            }
+        };
+
+        checkAuthState();
+    }, [router]);
 
     const handleChange = (field: string, value: string | boolean) => {
         setFormData((prev) => ({
@@ -491,7 +510,7 @@ const LoginPage = () => {
         }
     };
 
-    // IMPROVED FORGOT PASSWORD FUNCTION WITH RESET LINK
+    // SIMPLIFIED FORGOT PASSWORD - WALANG VERIFICATION CODE
     const handleForgotPassword = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
@@ -505,16 +524,8 @@ const LoginPage = () => {
         }
 
         try {
-            // Set the custom reset URL
-            const actionCodeSettings = {
-                url: `https://holy-event.vercel.app/reset-password`,
-                handleCodeInApp: true
-            };
-
-            // Send password reset email with custom URL
-            await sendPasswordResetEmail(auth, resetEmail, actionCodeSettings);
+            await sendPasswordResetEmail(auth, resetEmail);
             
-            // Save reset request to database
             try {
                 const resetRequestRef = doc(db, 'passwordResetRequests', `${resetEmail}_${Date.now()}`);
                 await setDoc(resetRequestRef, {
@@ -522,17 +533,16 @@ const LoginPage = () => {
                     requestedAt: serverTimestamp(),
                     status: 'sent',
                     ipAddress: clientIP,
-                    userAgent: navigator.userAgent,
-                    resetUrl: actionCodeSettings.url
+                    userAgent: navigator.userAgent
                 });
                 console.log('✅ Password reset request saved to database');
             } catch (dbError) {
                 console.error('Error saving reset request to database:', dbError);
             }
             
-            // Mark as email sent
+            // MARK AS EMAIL SENT - DISABLE EDITING
             setEmailSent(true);
-            setSuccess(`Password reset email sent to ${resetEmail}! Please check your inbox AND spam folder. Click the link in the email to set your new password.`);
+            setSuccess('Password reset email sent! Please check your inbox AND spam folder for the reset link. The link will expire in 1 hour.');
             
         } catch (err: any) {
             console.error('Password reset error:', err);
@@ -545,15 +555,6 @@ const LoginPage = () => {
         } finally {
             setResetLoading(false);
         }
-    };
-
-    // NEW FUNCTION: Handle back to login from forgot password
-    const handleBackToLoginFromForgot = () => {
-        setShowForgotPassword(false);
-        setEmailSent(false);
-        setResetEmail('');
-        setError('');
-        setSuccess('');
     };
 
     const handleMfaSubmit = async (e: React.FormEvent) => {
@@ -610,10 +611,13 @@ const LoginPage = () => {
 
     const handleBackToLogin = () => {
         setShowMfaInput(false);
+        setShowForgotPassword(false);
         setMfaResolver(null);
         setTotpCode('');
         setError('');
         setSuccess('');
+        setResetEmail('');
+        setEmailSent(false); // RESET EMAIL SENT STATE
     };
 
     // Check if currently locked out
@@ -668,7 +672,7 @@ const LoginPage = () => {
         );
     };
 
-    // FORGOT PASSWORD SCREEN - STAYS HERE AFTER SENDING EMAIL
+    // SIMPLIFIED FORGOT PASSWORD SCREEN - DISABLED AFTER SENDING
     if (showForgotPassword) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -736,7 +740,7 @@ const LoginPage = () => {
                                     type="button"
                                     variant="outline"
                                     className="w-full"
-                                    onClick={handleBackToLoginFromForgot}
+                                    onClick={handleBackToLogin}
                                     disabled={resetLoading}
                                 >
                                     <ArrowLeft className="mr-2 h-4 w-4" />
@@ -744,7 +748,7 @@ const LoginPage = () => {
                                 </Button>
                             </form>
                         ) : (
-                            // AFTER EMAIL SENT - STAY ON THIS SCREEN
+                            // AFTER EMAIL SENT - WAITING MODE
                             <div className="space-y-5">
                                 <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                                     <div className="flex items-start gap-3">
@@ -758,13 +762,12 @@ const LoginPage = () => {
                                             </p>
                                             <div className="mt-2 p-3 bg-green-100 rounded border border-green-200">
                                                 <p className="text-xs font-medium text-green-800 mb-1">
-                                                    📧 Important Instructions:
+                                                    📧 Important:
                                                 </p>
                                                 <ul className="text-xs text-green-700 space-y-1">
-                                                    <li>• <strong>Check your Spam or Junk folder</strong></li>
-                                                    <li>• Click the <strong>"Reset Password"</strong> link in the email</li>
-                                                    <li>• You'll be taken to a page to set your new password</li>
+                                                    <li>• Check your <strong>Spam</strong> or <strong>Junk</strong> folder</li>
                                                     <li>• The reset link expires in 1 hour</li>
+                                                    <li>• Click the link in the email to continue</li>
                                                     <li>• Email sent to: <strong>{resetEmail}</strong></li>
                                                 </ul>
                                             </div>
@@ -780,7 +783,7 @@ const LoginPage = () => {
                                         </span>
                                     </div>
                                     <p className="text-xs text-blue-600">
-                                        Once you click the reset link in your email, you'll be able to set a new password on our secure page.
+                                        Once you click the reset link in your email, you can set a new password.
                                     </p>
                                 </div>
 
@@ -789,7 +792,7 @@ const LoginPage = () => {
                                         type="button"
                                         variant="outline"
                                         className="flex-1"
-                                        onClick={handleBackToLoginFromForgot}
+                                        onClick={handleBackToLogin}
                                     >
                                         <ArrowLeft className="mr-2 h-4 w-4" />
                                         Back to Login
@@ -813,7 +816,7 @@ const LoginPage = () => {
                                     </h3>
                                     <ul className="space-y-1 text-xs text-yellow-700">
                                         <li>• Wait a few minutes - emails can take 1-5 minutes</li>
-                                        <li>• Check your spam or junk folder carefully</li>
+                                        <li>• Check your spam or junk folder</li>
                                         <li>• Make sure you entered the correct email address</li>
                                         <li>• Try again in a few minutes if needed</li>
                                     </ul>
