@@ -39,6 +39,12 @@ const AdminSettingsPage = () => {
         address: '',
     });
 
+    const [originalProfile, setOriginalProfile] = useState({
+        fullName: '',
+        phoneNumber: '',
+        address: '',
+    });
+
     // ── Password ───────────────────────────────────────
     const [passwords, setPasswords] = useState({
         current: '',
@@ -69,11 +75,13 @@ const AdminSettingsPage = () => {
                 const snap = await getDoc(doc(db, 'users', user.uid));
                 if (snap.exists()) {
                     const d = snap.data();
-                    setProfile({
+                    const profileData = {
                         fullName: d.fullName ?? '',
                         phoneNumber: d.phoneNumber ?? '',
                         address: d.address ?? '',
-                    });
+                    };
+                    setProfile(profileData);
+                    setOriginalProfile(profileData); // Save original data for comparison
                 }
                 const mfa = multiFactor(user);
                 const hasTotp = mfa.enrolledFactors.some(
@@ -100,11 +108,29 @@ const AdminSettingsPage = () => {
     };
 
     /* -------------------------------------------------------------
-       Profile update
+       Check if profile has changes
+       ------------------------------------------------------------- */
+    const hasProfileChanges = () => {
+        return (
+            profile.fullName !== originalProfile.fullName ||
+            profile.phoneNumber !== originalProfile.phoneNumber ||
+            profile.address !== originalProfile.address
+        );
+    };
+
+    /* -------------------------------------------------------------
+       Profile update - only if changes detected
        ------------------------------------------------------------- */
     const handleProfileUpdate = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!user) return;
+        
+        // Check if there are any changes
+        if (!hasProfileChanges()) {
+            showMessage('No changes detected.', true);
+            return;
+        }
+
         setLoading(true);
         try {
             await updateDoc(doc(db, 'users', user.uid), {
@@ -112,7 +138,9 @@ const AdminSettingsPage = () => {
                 phoneNumber: profile.phoneNumber,
                 address: profile.address,
             });
-            showMessage('Profile updated!');
+            // Update original profile to current state
+            setOriginalProfile({ ...profile });
+            showMessage('Profile updated successfully!');
         } catch (err: any) {
             showMessage(err.message, true);
         } finally {
@@ -126,16 +154,30 @@ const AdminSettingsPage = () => {
     const handlePasswordChange = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!user) return;
+        
+        // Check if passwords are empty
+        if (!passwords.current || !passwords.new || !passwords.confirm) {
+            showMessage('Please fill in all password fields.', true);
+            return;
+        }
+        
         if (passwords.new !== passwords.confirm) {
             showMessage('Passwords do not match.', true);
             return;
         }
+        
+        // Check if new password is same as current
+        if (passwords.new === passwords.current) {
+            showMessage('New password must be different from current password.', true);
+            return;
+        }
+
         setLoading(true);
         try {
             const cred = EmailAuthProvider.credential(user.email!, passwords.current);
             await reauthenticateWithCredential(user, cred);
             await updatePassword(user, passwords.new);
-            showMessage('Password changed!');
+            showMessage('Password changed successfully!');
             setPasswords({ current: '', new: '', confirm: '' });
         } catch (err: any) {
             showMessage(err.message || 'Password change failed.', true);
@@ -297,10 +339,19 @@ const AdminSettingsPage = () => {
                                         }
                                     />
                                 </div>
-                                <Button type="submit" disabled={loading}>
+                                <Button 
+                                    type="submit" 
+                                    disabled={loading || !hasProfileChanges()}
+                                    className={!hasProfileChanges() ? 'opacity-50 cursor-not-allowed' : ''}
+                                >
                                     {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                     Update Profile
                                 </Button>
+                                {!hasProfileChanges() && (
+                                    <p className="text-sm text-muted-foreground mt-2">
+                                        No changes made to profile
+                                    </p>
+                                )}
                             </form>
                         </CardContent>
                     </Card>
@@ -350,10 +401,23 @@ const AdminSettingsPage = () => {
                                         required
                                     />
                                 </div>
-                                <Button type="submit" disabled={loading}>
+                                <Button 
+                                    type="submit" 
+                                    disabled={loading || !passwords.current || !passwords.new || !passwords.confirm}
+                                    className={
+                                        (!passwords.current || !passwords.new || !passwords.confirm) 
+                                        ? 'opacity-50 cursor-not-allowed' 
+                                        : ''
+                                    }
+                                >
                                     {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                    Change Password
+                                    Edit Password
                                 </Button>
+                                {(!passwords.current || !passwords.new || !passwords.confirm) && (
+                                    <p className="text-sm text-muted-foreground mt-2">
+                                        Please fill in all password fields
+                                    </p>
+                                )}
                             </form>
                         </CardContent>
                     </Card>
