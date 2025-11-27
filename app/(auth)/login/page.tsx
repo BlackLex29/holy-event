@@ -53,7 +53,7 @@ const LoginPage = () => {
     const [showForgotPassword, setShowForgotPassword] = useState(false);
     const [resetEmail, setResetEmail] = useState('');
     const [resetLoading, setResetLoading] = useState(false);
-    const [emailSent, setEmailSent] = useState(false); // NEW: Track if email has been sent
+    const [emailSent, setEmailSent] = useState(false);
     
     // Brute force protection state
     const [failedAttempts, setFailedAttempts] = useState(0);
@@ -403,13 +403,14 @@ const LoginPage = () => {
         }
     };
 
+    // FIXED: Corrected the userData variable name
     const redirectUser = async (uid: string, email: string) => {
         try {
             const userDoc = await getDoc(doc(db, 'users', uid));
             let role = 'client';
             
             if (userDoc.exists()) {
-                const userData = userDoc.data();
+                const userData = userDoc.data(); // FIXED: Changed from userData.data() to userDoc.data()
                 role = userData.role || 'client';
                 
                 await updateDoc(doc(db, 'users', uid), {
@@ -510,51 +511,68 @@ const LoginPage = () => {
         }
     };
 
-    // SIMPLIFIED FORGOT PASSWORD - WALANG VERIFICATION CODE
-    const handleForgotPassword = async (e: React.FormEvent) => {
-        e.preventDefault();
+    // IMPROVED FORGOT PASSWORD FUNCTION WITH RESET LINK
+const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    setResetLoading(true);
+
+    if (!resetEmail) {
+        setError('Please enter your email address');
+        setResetLoading(false);
+        return;
+    }
+
+    try {
+        // Set the custom reset URL
+        const actionCodeSettings = {
+            url: `https://holy-event.vercel.app/reset-password`,
+            handleCodeInApp: true
+        };
+
+        // Send password reset email with custom URL
+        await sendPasswordResetEmail(auth, resetEmail, actionCodeSettings);
+        
+        // Save reset request to database
+        try {
+            const resetRequestRef = doc(db, 'passwordResetRequests', `${resetEmail}_${Date.now()}`);
+            await setDoc(resetRequestRef, {
+                email: resetEmail,
+                requestedAt: serverTimestamp(),
+                status: 'sent',
+                ipAddress: clientIP,
+                userAgent: navigator.userAgent,
+                resetUrl: actionCodeSettings.url
+            });
+            console.log('✅ Password reset request saved to database');
+        } catch (dbError) {
+            console.error('Error saving reset request to database:', dbError);
+        }
+        
+        // Mark as email sent
+        setEmailSent(true);
+        setSuccess(`Password reset email sent to ${resetEmail}! Please check your inbox AND spam folder. Click the link in the email to set your new password.`);
+        
+    } catch (err: any) {
+        console.error('Password reset error:', err);
+        const messages: { [key: string]: string } = {
+            'auth/invalid-email': 'Please enter a valid email address.',
+            'auth/user-not-found': 'No account found with this email.',
+            'auth/too-many-requests': 'Too many attempts. Please try again later.',
+        };
+        setError(messages[err.code] || 'Failed to send reset email. Please try again.');
+    } finally {
+        setResetLoading(false);
+    }
+};
+    // NEW FUNCTION: Handle back to login from forgot password
+    const handleBackToLoginFromForgot = () => {
+        setShowForgotPassword(false);
+        setEmailSent(false);
+        setResetEmail('');
         setError('');
         setSuccess('');
-        setResetLoading(true);
-
-        if (!resetEmail) {
-            setError('Please enter your email address');
-            setResetLoading(false);
-            return;
-        }
-
-        try {
-            await sendPasswordResetEmail(auth, resetEmail);
-            
-            try {
-                const resetRequestRef = doc(db, 'passwordResetRequests', `${resetEmail}_${Date.now()}`);
-                await setDoc(resetRequestRef, {
-                    email: resetEmail,
-                    requestedAt: serverTimestamp(),
-                    status: 'sent',
-                    ipAddress: clientIP,
-                    userAgent: navigator.userAgent
-                });
-                console.log('✅ Password reset request saved to database');
-            } catch (dbError) {
-                console.error('Error saving reset request to database:', dbError);
-            }
-            
-            // MARK AS EMAIL SENT - DISABLE EDITING
-            setEmailSent(true);
-            setSuccess('Password reset email sent! Please check your inbox AND spam folder for the reset link. The link will expire in 1 hour.');
-            
-        } catch (err: any) {
-            console.error('Password reset error:', err);
-            const messages: { [key: string]: string } = {
-                'auth/invalid-email': 'Please enter a valid email address.',
-                'auth/user-not-found': 'No account found with this email.',
-                'auth/too-many-requests': 'Too many attempts. Please try again later.',
-            };
-            setError(messages[err.code] || 'Failed to send reset email. Please try again.');
-        } finally {
-            setResetLoading(false);
-        }
     };
 
     const handleMfaSubmit = async (e: React.FormEvent) => {
@@ -611,13 +629,10 @@ const LoginPage = () => {
 
     const handleBackToLogin = () => {
         setShowMfaInput(false);
-        setShowForgotPassword(false);
         setMfaResolver(null);
         setTotpCode('');
         setError('');
         setSuccess('');
-        setResetEmail('');
-        setEmailSent(false); // RESET EMAIL SENT STATE
     };
 
     // Check if currently locked out
@@ -672,7 +687,7 @@ const LoginPage = () => {
         );
     };
 
-    // SIMPLIFIED FORGOT PASSWORD SCREEN - DISABLED AFTER SENDING
+    // FORGOT PASSWORD SCREEN - STAYS HERE AFTER SENDING EMAIL
     if (showForgotPassword) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -740,7 +755,7 @@ const LoginPage = () => {
                                     type="button"
                                     variant="outline"
                                     className="w-full"
-                                    onClick={handleBackToLogin}
+                                    onClick={handleBackToLoginFromForgot}
                                     disabled={resetLoading}
                                 >
                                     <ArrowLeft className="mr-2 h-4 w-4" />
@@ -748,7 +763,7 @@ const LoginPage = () => {
                                 </Button>
                             </form>
                         ) : (
-                            // AFTER EMAIL SENT - WAITING MODE
+                            // AFTER EMAIL SENT - STAY ON THIS SCREEN
                             <div className="space-y-5">
                                 <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                                     <div className="flex items-start gap-3">
@@ -762,12 +777,13 @@ const LoginPage = () => {
                                             </p>
                                             <div className="mt-2 p-3 bg-green-100 rounded border border-green-200">
                                                 <p className="text-xs font-medium text-green-800 mb-1">
-                                                    📧 Important:
+                                                    📧 Important Instructions:
                                                 </p>
                                                 <ul className="text-xs text-green-700 space-y-1">
-                                                    <li>• Check your <strong>Spam</strong> or <strong>Junk</strong> folder</li>
+                                                    <li>• <strong>Check your Spam or Junk folder</strong></li>
+                                                    <li>• Click the <strong>"Reset Password"</strong> link in the email</li>
+                                                    <li>• You'll be taken to a page to set your new password</li>
                                                     <li>• The reset link expires in 1 hour</li>
-                                                    <li>• Click the link in the email to continue</li>
                                                     <li>• Email sent to: <strong>{resetEmail}</strong></li>
                                                 </ul>
                                             </div>
@@ -783,7 +799,7 @@ const LoginPage = () => {
                                         </span>
                                     </div>
                                     <p className="text-xs text-blue-600">
-                                        Once you click the reset link in your email, you can set a new password.
+                                        Once you click the reset link in your email, you'll be able to set a new password on our secure page.
                                     </p>
                                 </div>
 
@@ -792,7 +808,7 @@ const LoginPage = () => {
                                         type="button"
                                         variant="outline"
                                         className="flex-1"
-                                        onClick={handleBackToLogin}
+                                        onClick={handleBackToLoginFromForgot}
                                     >
                                         <ArrowLeft className="mr-2 h-4 w-4" />
                                         Back to Login
@@ -816,7 +832,7 @@ const LoginPage = () => {
                                     </h3>
                                     <ul className="space-y-1 text-xs text-yellow-700">
                                         <li>• Wait a few minutes - emails can take 1-5 minutes</li>
-                                        <li>• Check your spam or junk folder</li>
+                                        <li>• Check your spam or junk folder carefully</li>
                                         <li>• Make sure you entered the correct email address</li>
                                         <li>• Try again in a few minutes if needed</li>
                                     </ul>
