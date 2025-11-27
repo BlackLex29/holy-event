@@ -17,7 +17,8 @@ import {
   Clock,
   User,
   Mail,
-  Phone
+  Phone,
+  Sparkles
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/components/ui/use-toast';
@@ -55,61 +56,76 @@ const ManageAppointmentsPage = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [refreshEffect, setRefreshEffect] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState<string>('');
   const { toast } = useToast();
 
-  // Fetch real data from Firebase
+  // Real-time listener for appointments
   useEffect(() => {
-    const fetchAppointments = async () => {
+    let unsubscribe: (() => void) | undefined;
+
+    const setupRealTimeListener = () => {
       try {
         setLoading(true);
         
-        // Fetch all appointments ordered by creation date
         const appointmentsQuery = query(
           collection(db, 'appointments'),
           orderBy('createdAt', 'desc')
         );
 
-        // Real-time listener for appointments
-        const unsubscribeAppointments = onSnapshot(appointmentsQuery, (snapshot) => {
-          const appointmentsData: Appointment[] = [];
-          snapshot.forEach((doc) => {
-            const data = doc.data();
-            appointmentsData.push({
-              id: doc.id,
-              fullName: data.fullName || '',
-              email: data.email || '',
-              phone: data.phone || '',
-              eventType: data.eventType || '',
-              eventDate: data.eventDate || '',
-              eventTime: data.eventTime || '',
-              guestCount: data.guestCount || '',
-              message: data.message || '',
-              status: data.status || 'pending',
-              createdAt: data.createdAt
+        unsubscribe = onSnapshot(appointmentsQuery, 
+          (snapshot) => {
+            const appointmentsData: Appointment[] = [];
+            snapshot.forEach((doc) => {
+              const data = doc.data();
+              appointmentsData.push({
+                id: doc.id,
+                fullName: data.fullName || '',
+                email: data.email || '',
+                phone: data.phone || '',
+                eventType: data.eventType || '',
+                eventDate: data.eventDate || '',
+                eventTime: data.eventTime || '',
+                guestCount: data.guestCount || '',
+                message: data.message || '',
+                status: data.status || 'pending',
+                createdAt: data.createdAt
+              });
             });
-          });
-          setAppointments(appointmentsData);
-          setFilteredAppointments(appointmentsData);
-        });
-
-        return () => {
-          unsubscribeAppointments();
-        };
+            setAppointments(appointmentsData);
+            setLoading(false);
+            
+            // Auto-update last refresh time on real-time updates
+            if (!refreshing) {
+              setLastRefreshTime(new Date().toLocaleTimeString());
+            }
+          },
+          (error) => {
+            console.error('Error in real-time listener:', error);
+            toast({
+              title: 'Connection Error',
+              description: 'Failed to connect to real-time updates',
+              variant: 'destructive'
+            });
+            setLoading(false);
+          }
+        );
 
       } catch (error) {
-        console.error('Error fetching appointments:', error);
-        toast({
-          title: 'Error',
-          description: 'Failed to load appointments',
-          variant: 'destructive'
-        });
-      } finally {
+        console.error('Error setting up real-time listener:', error);
         setLoading(false);
       }
     };
 
-    fetchAppointments();
-  }, [toast]);
+    setupRealTimeListener();
+
+    // Cleanup function
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [toast, refreshing]);
 
   // Filter appointments based on search and status
   useEffect(() => {
@@ -139,7 +155,6 @@ const ManageAppointmentsPage = () => {
     try {
       setRefreshing(true);
       
-      // Update in Firebase
       const appointmentRef = doc(db, 'appointments', appointmentId);
       await updateDoc(appointmentRef, {
         status: action === 'approve' ? 'approved' : 'rejected',
@@ -151,6 +166,7 @@ const ManageAppointmentsPage = () => {
         description: `The appointment has been ${action === 'approve' ? 'approved' : 'rejected'}.`,
       });
     } catch (error) {
+      console.error('Error updating appointment:', error);
       toast({
         title: 'Error',
         description: `Failed to ${action} appointment`,
@@ -161,17 +177,34 @@ const ManageAppointmentsPage = () => {
     }
   };
 
-  // Refresh all data
+  // Refresh animation effect
+  useEffect(() => {
+    if (refreshEffect) {
+      const timer = setTimeout(() => {
+        setRefreshEffect(false);
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [refreshEffect]);
+
+  // Manual refresh function with visual effects
   const handleRefresh = async () => {
-    setRefreshing(true);
     try {
-      // Force re-fetch by triggering the onSnapshot again
+      setRefreshing(true);
+      setRefreshEffect(true);
+      
+      // Add a small delay to show the refresh animation
+      await new Promise(resolve => setTimeout(resolve, 800));
+      
+      // Force refresh by re-querying the data
       const appointmentsQuery = query(
         collection(db, 'appointments'),
         orderBy('createdAt', 'desc')
       );
+      
       const snapshot = await getDocs(appointmentsQuery);
       const appointmentsData: Appointment[] = [];
+      
       snapshot.forEach((doc) => {
         const data = doc.data();
         appointmentsData.push({
@@ -188,16 +221,20 @@ const ManageAppointmentsPage = () => {
           createdAt: data.createdAt
         });
       });
+      
       setAppointments(appointmentsData);
+      setLastRefreshTime(new Date().toLocaleTimeString());
       
       toast({
-        title: 'Refreshed',
-        description: 'Appointments data has been updated.',
+        title: '✅ Data Refreshed!',
+        description: `Appointments updated at ${new Date().toLocaleTimeString()}`,
       });
+      
     } catch (error) {
+      console.error('Error refreshing data:', error);
       toast({
-        title: 'Error',
-        description: 'Failed to refresh data',
+        title: '❌ Refresh Failed',
+        description: 'Could not refresh appointments data',
         variant: 'destructive'
       });
     } finally {
@@ -206,12 +243,6 @@ const ManageAppointmentsPage = () => {
   };
 
   const getStatusBadge = (status: string) => {
-    const variants = {
-      pending: 'default',
-      approved: 'secondary',
-      rejected: 'destructive'
-    } as const;
-
     const colors = {
       pending: 'bg-yellow-100 text-yellow-800 border-yellow-200',
       approved: 'bg-green-100 text-green-800 border-green-200',
@@ -226,12 +257,16 @@ const ManageAppointmentsPage = () => {
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    });
+    try {
+      return new Date(dateString).toLocaleDateString('en-US', {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+    } catch (error) {
+      return 'Invalid date';
+    }
   };
 
   const formatEventType = (eventType: string): string => {
@@ -255,13 +290,17 @@ const ManageAppointmentsPage = () => {
 
   const formatDateTime = (timestamp: any) => {
     if (!timestamp) return 'N/A';
-    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+    try {
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (error) {
+      return 'Invalid date';
+    }
   };
 
   const getStatusCount = (status: string) => {
@@ -292,18 +331,33 @@ const ManageAppointmentsPage = () => {
               </h1>
               <p className="mt-2 text-primary-foreground/80 text-sm sm:text-base">
                 Review and manage all sacrament appointment requests
+                {lastRefreshTime && (
+                  <span className="block text-xs opacity-70 mt-1">
+                    Last updated: {lastRefreshTime}
+                  </span>
+                )}
               </p>
             </div>
             <div className="flex items-center gap-3 w-full sm:w-auto">
               <Button 
                 variant="secondary" 
                 size="sm"
-                className="gap-2 flex-1 sm:flex-none"
+                className={`gap-2 flex-1 sm:flex-none transition-all duration-300 ${
+                  refreshEffect ? 'bg-green-100 text-green-700 border-green-200 scale-105' : ''
+                } ${
+                  refreshing ? 'opacity-70' : 'hover:scale-105'
+                }`}
                 onClick={handleRefresh}
                 disabled={refreshing}
               >
-                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-                <span className="hidden sm:inline">Refresh</span>
+                {refreshEffect ? (
+                  <Sparkles className="w-4 h-4 animate-pulse" />
+                ) : (
+                  <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                )}
+                <span className="hidden sm:inline">
+                  {refreshing ? 'Refreshing...' : refreshEffect ? 'Refreshed!' : 'Refresh'}
+                </span>
               </Button>
             </div>
           </div>
@@ -311,9 +365,18 @@ const ManageAppointmentsPage = () => {
       </div>
 
       <div className="container mx-auto px-4 sm:px-6 py-6 -mt-2 sm:-mt-4">
-        {/* Stats Overview */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8">
-          <Card className="border-l-4 border-l-yellow-500 shadow-lg">
+        {/* Refresh Animation Overlay */}
+        {refreshEffect && (
+          <div className="fixed inset-0 bg-green-500/10 pointer-events-none z-50 animate-pulse" />
+        )}
+
+        {/* Stats Overview with Refresh Effects */}
+        <div className={`grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-6 sm:mb-8 transition-all duration-500 ${
+          refreshEffect ? 'scale-105' : 'scale-100'
+        }`}>
+          <Card className={`border-l-4 border-l-yellow-500 shadow-lg transition-all duration-300 ${
+            refreshEffect ? 'animate-bounce' : 'hover:shadow-xl'
+          }`}>
             <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Pending
@@ -326,7 +389,9 @@ const ManageAppointmentsPage = () => {
             </CardContent>
           </Card>
 
-          <Card className="border-l-4 border-l-green-500 shadow-lg">
+          <Card className={`border-l-4 border-l-green-500 shadow-lg transition-all duration-300 ${
+            refreshEffect ? 'animate-bounce' : 'hover:shadow-xl'
+          }`}>
             <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Approved
@@ -339,7 +404,9 @@ const ManageAppointmentsPage = () => {
             </CardContent>
           </Card>
 
-          <Card className="border-l-4 border-l-red-500 shadow-lg">
+          <Card className={`border-l-4 border-l-red-500 shadow-lg transition-all duration-300 ${
+            refreshEffect ? 'animate-bounce' : 'hover:shadow-xl'
+          }`}>
             <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Rejected
@@ -354,7 +421,9 @@ const ManageAppointmentsPage = () => {
         </div>
 
         {/* Filters and Search */}
-        <Card className="mb-6 sm:mb-8">
+        <Card className={`mb-6 sm:mb-8 transition-all duration-300 ${
+          refreshEffect ? 'ring-2 ring-green-400' : ''
+        }`}>
           <CardContent className="p-4 sm:p-6">
             <div className="flex flex-col sm:flex-row gap-4">
               <div className="flex-1 relative">
@@ -401,14 +470,26 @@ const ManageAppointmentsPage = () => {
         </Card>
 
         {/* Appointments List */}
-        <Card>
+        <Card className={`transition-all duration-500 ${
+          refreshEffect ? 'ring-2 ring-blue-400 bg-blue-50/30' : ''
+        }`}>
           <CardHeader className="pb-4">
-            <CardTitle className="text-lg sm:text-xl">All Appointments</CardTitle>
-            <CardDescription className="text-sm">
-              {filteredAppointments.length} appointment(s) found
-              {searchTerm && ` for "${searchTerm}"`}
-              {statusFilter !== 'all' && ` (${statusFilter})`}
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg sm:text-xl">All Appointments</CardTitle>
+                <CardDescription className="text-sm">
+                  {filteredAppointments.length} appointment(s) found
+                  {searchTerm && ` for "${searchTerm}"`}
+                  {statusFilter !== 'all' && ` (${statusFilter})`}
+                </CardDescription>
+              </div>
+              {refreshing && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Updating...
+                </div>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="px-4 sm:px-6">
             <div className="space-y-4">
@@ -424,8 +505,16 @@ const ManageAppointmentsPage = () => {
                   </p>
                 </div>
               ) : (
-                filteredAppointments.map((appointment) => (
-                  <div key={appointment.id} className="p-4 sm:p-6 rounded-lg border bg-card hover:shadow-lg transition-all duration-200">
+                filteredAppointments.map((appointment, index) => (
+                  <div 
+                    key={appointment.id} 
+                    className={`p-4 sm:p-6 rounded-lg border bg-card hover:shadow-lg transition-all duration-200 ${
+                      refreshEffect ? 'animate-pulse bg-green-50/50' : ''
+                    }`}
+                    style={{
+                      animationDelay: refreshEffect ? `${index * 0.1}s` : '0s'
+                    }}
+                  >
                     <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
                       {/* Appointment Details */}
                       <div className="flex-1 space-y-4">
@@ -520,6 +609,11 @@ const ManageAppointmentsPage = () => {
         {/* Footer Note */}
         <div className="mt-8 sm:mt-12 text-center text-xs sm:text-sm text-muted-foreground">
           <p>"Whatever you do, work at it with all your heart, as working for the Lord." — Colossians 3:23</p>
+          {lastRefreshTime && (
+            <p className="mt-2 text-xs opacity-70">
+              Last manual refresh: {lastRefreshTime}
+            </p>
+          )}
         </div>
       </div>
     </div>
