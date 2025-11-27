@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,9 +8,10 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { confirmPasswordReset, verifyPasswordResetCode } from 'firebase/auth';
 import { auth } from '@/lib/firebase-config';
-import { LockKeyhole, CheckCircle, AlertCircle, ArrowLeft, Eye, EyeOff } from 'lucide-react';
+import { LockKeyhole, CheckCircle, AlertCircle, ArrowLeft, Eye, EyeOff, Loader2 } from 'lucide-react';
 
-const ResetPasswordPage = () => {
+// Main component that uses useSearchParams
+function ResetPasswordContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const [loading, setLoading] = useState(false);
@@ -75,12 +76,10 @@ const ResetPasswordPage = () => {
         setLoading(true);
 
         try {
-            // Confirm password reset
             await confirmPasswordReset(auth, oobCode, formData.password);
             
             setSuccess('Password successfully reset! Redirecting to login...');
             
-            // Redirect to login after 3 seconds
             setTimeout(() => {
                 router.push('/login');
             }, 3000);
@@ -254,7 +253,7 @@ const ResetPasswordPage = () => {
                                     >
                                         {loading ? (
                                             <>
-                                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                                 Resetting Password...
                                             </>
                                         ) : (
@@ -280,6 +279,32 @@ const ResetPasswordPage = () => {
             </Card>
         </div>
     );
-};
+}
 
-export default ResetPasswordPage;
+// Loading component
+function ResetPasswordLoading() {
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-background p-4">
+            <Card className="w-full max-w-md">
+                <CardContent className="p-6">
+                    <div className="text-center space-y-4">
+                        <Loader2 className="w-16 h-16 text-blue-500 mx-auto animate-spin" />
+                        <h2 className="text-2xl font-bold text-blue-600">Loading</h2>
+                        <p className="text-muted-foreground">
+                            Preparing password reset...
+                        </p>
+                    </div>
+                </CardContent>
+            </Card>
+        </div>
+    );
+}
+
+// Main page component with Suspense
+export default function ResetPasswordPage() {
+    return (
+        <Suspense fallback={<ResetPasswordLoading />}>
+            <ResetPasswordContent />
+        </Suspense>
+    );
+}
