@@ -15,28 +15,12 @@ import {
     EmailAuthProvider,
     multiFactor,
     TotpMultiFactorGenerator,
+    TotpSecret,
     onAuthStateChanged,
 } from 'firebase/auth';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase-config';
-
-// Simple QR Code component fallback
-const QRCodeFallback = ({ value, size }: { value: string; size: number }) => {
-    return (
-        <div className="border-2 border-dashed border-gray-300 p-4 text-center" style={{ width: size, height: size }}>
-            <p className="text-sm text-muted-foreground">QR Code: {value.substring(0, 50)}...</p>
-            <p className="text-xs text-muted-foreground mt-2">Install QR scanner to view</p>
-        </div>
-    );
-};
-
-// Dynamic import for QR Code
-const QRCodeSVG = dynamic(() => import('qrcode.react').then(mod => mod.QRCodeSVG), {
-    ssr: false,
-    loading: () => <div className="animate-pulse bg-muted" style={{ width: 192, height: 192 }} />
-});
-
-import dynamic from 'next/dynamic';
+import { QRCodeSVG } from 'qrcode.react';
 
 /* -------------------------------------------------------------
    Component
@@ -69,7 +53,7 @@ const AdminSettingsPage = () => {
     });
 
     // ── TOTP ───────────────────────────────────────────
-    const [totpSecret, setTotpSecret] = useState<any>(null);
+    const [totpSecret, setTotpSecret] = useState<TotpSecret | null>(null);
     const [totpCode, setTotpCode] = useState('');
     const [totpEnabled, setTotpEnabled] = useState(false);
     const [verifyingTotp, setVerifyingTotp] = useState(false);
@@ -77,12 +61,9 @@ const AdminSettingsPage = () => {
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
             setUser(currentUser);
-            if (!currentUser) {
-                router.push('/login');
-            }
         });
         return () => unsubscribe();
-    }, [router]);
+    }, []);
 
     /* -------------------------------------------------------------
        Load profile + MFA status
@@ -100,22 +81,14 @@ const AdminSettingsPage = () => {
                         address: d.address ?? '',
                     };
                     setProfile(profileData);
-                    setOriginalProfile(profileData);
+                    setOriginalProfile(profileData); // Save original data for comparison
                 }
-                
-                // Check MFA status
-                try {
-                    const mfa = multiFactor(user);
-                    const hasTotp = mfa.enrolledFactors.some(
-                        (f: any) => f.factorId === TotpMultiFactorGenerator.FACTOR_ID
-                    );
-                    setTotpEnabled(hasTotp);
-                } catch (mfaError) {
-                    console.log('MFA not configured:', mfaError);
-                    setTotpEnabled(false);
-                }
-            } catch (err) {
-                console.error('Failed to load settings:', err);
+                const mfa = multiFactor(user);
+                const hasTotp = mfa.enrolledFactors.some(
+                    (f) => f.factorId === TotpMultiFactorGenerator.FACTOR_ID
+                );
+                setTotpEnabled(hasTotp);
+            } catch {
                 setError('Failed to load settings.');
             }
         };
@@ -126,13 +99,8 @@ const AdminSettingsPage = () => {
        UI helpers
        ------------------------------------------------------------- */
     const showMessage = (msg: string, isError = false) => {
-        if (isError) {
-            setError(msg);
-            setSuccess('');
-        } else {
-            setSuccess(msg);
-            setError('');
-        }
+        if (isError) setError(msg);
+        else setSuccess(msg);
         setTimeout(() => {
             setError('');
             setSuccess('');
@@ -157,6 +125,7 @@ const AdminSettingsPage = () => {
         e.preventDefault();
         if (!user) return;
         
+        // Check if there are any changes
         if (!hasProfileChanges()) {
             showMessage('No changes detected.', true);
             return;
@@ -168,12 +137,12 @@ const AdminSettingsPage = () => {
                 fullName: profile.fullName,
                 phoneNumber: profile.phoneNumber,
                 address: profile.address,
-                updatedAt: new Date(),
             });
+            // Update original profile to current state
             setOriginalProfile({ ...profile });
             showMessage('Profile updated successfully!');
         } catch (err: any) {
-            showMessage(err.message || 'Failed to update profile', true);
+            showMessage(err.message, true);
         } finally {
             setLoading(false);
         }
@@ -186,6 +155,7 @@ const AdminSettingsPage = () => {
         e.preventDefault();
         if (!user) return;
         
+        // Check if passwords are empty
         if (!passwords.current || !passwords.new || !passwords.confirm) {
             showMessage('Please fill in all password fields.', true);
             return;
@@ -196,13 +166,9 @@ const AdminSettingsPage = () => {
             return;
         }
         
+        // Check if new password is same as current
         if (passwords.new === passwords.current) {
             showMessage('New password must be different from current password.', true);
-            return;
-        }
-
-        if (passwords.new.length < 6) {
-            showMessage('New password must be at least 6 characters.', true);
             return;
         }
 
@@ -214,13 +180,7 @@ const AdminSettingsPage = () => {
             showMessage('Password changed successfully!');
             setPasswords({ current: '', new: '', confirm: '' });
         } catch (err: any) {
-            if (err.code === 'auth/wrong-password') {
-                showMessage('Current password is incorrect.', true);
-            } else if (err.code === 'auth/requires-recent-login') {
-                showMessage('Please log in again to change your password.', true);
-            } else {
-                showMessage(err.message || 'Password change failed.', true);
-            }
+            showMessage(err.message || 'Password change failed.', true);
         } finally {
             setLoading(false);
         }
@@ -237,9 +197,9 @@ const AdminSettingsPage = () => {
             const session = await mfa.getSession();
             const secret = await TotpMultiFactorGenerator.generateSecret(session);
             setTotpSecret(secret);
-            showMessage('Scan the QR code below with your authenticator app.');
+            showMessage('Scan the QR code below.');
         } catch (err: any) {
-            showMessage(err.message || 'Failed to enable 2FA', true);
+            showMessage(err.message, true);
         } finally {
             setLoading(false);
         }
@@ -263,7 +223,7 @@ const AdminSettingsPage = () => {
             setTotpCode('');
             showMessage('2FA enabled successfully!');
         } catch (err: any) {
-            showMessage(err.message || 'Invalid verification code.', true);
+            showMessage(err.message || 'Invalid code.', true);
         } finally {
             setVerifyingTotp(false);
         }
@@ -278,15 +238,19 @@ const AdminSettingsPage = () => {
         try {
             const mfa = multiFactor(user);
             const factor = mfa.enrolledFactors.find(
-                (f: any) => f.factorId === TotpMultiFactorGenerator.FACTOR_ID
+                (f) => f.factorId === TotpMultiFactorGenerator.FACTOR_ID
             );
             if (factor) {
                 await mfa.unenroll(factor);
                 setTotpEnabled(false);
-                showMessage('2FA disabled successfully.');
+                showMessage('2FA disabled.');
             }
         } catch (err: any) {
-            showMessage(err.message || 'Failed to disable 2FA', true);
+            if (err.code === 'auth/user-token-expired') {
+                showMessage('Session expired. Please re-authenticate and try again.', true);
+            } else {
+                showMessage(err.message, true);
+            }
         } finally {
             setLoading(false);
         }
@@ -298,31 +262,21 @@ const AdminSettingsPage = () => {
     const copySecret = () => {
         if (!totpSecret) return;
         navigator.clipboard.writeText(totpSecret.secretKey);
-        showMessage('Secret copied to clipboard!');
+        showMessage('Secret copied!');
     };
 
     /* -------------------------------------------------------------
        Build otpauth URL for QR code
        ------------------------------------------------------------- */
-    const otpUrl = totpSecret && user
-        ? `otpauth://totp/Grace%20Fellowship:${user.email}?secret=${totpSecret.secretKey}&issuer=Grace%20Fellowship`
+    const otpUrl = totpSecret
+        ? totpSecret.generateQrCodeUrl(user!.email!, 'Grace Fellowship')
         : '';
-
-    if (!user) {
-        return (
-            <div className="container max-w-4xl py-8">
-                <div className="flex justify-center items-center min-h-64">
-                    <Loader2 className="h-8 w-8 animate-spin" />
-                </div>
-            </div>
-        );
-    }
 
     return (
         <div className="container max-w-4xl py-8">
-            {/* Header with Title Only */}
+            {/* Header with Title Only - Logout Button Removed */}
             <div className="mb-8">
-                <h1 className="text-3xl font-bold">User Settings</h1>
+                <h1 className="text-3xl font-bold">Admin Settings</h1>
             </div>
 
             {error && (
@@ -362,7 +316,6 @@ const AdminSettingsPage = () => {
                                             onChange={(e) =>
                                                 setProfile({ ...profile, fullName: e.target.value })
                                             }
-                                            placeholder="Enter your full name"
                                         />
                                     </div>
                                     <div className="space-y-2">
@@ -373,7 +326,6 @@ const AdminSettingsPage = () => {
                                             onChange={(e) =>
                                                 setProfile({ ...profile, phoneNumber: e.target.value })
                                             }
-                                            placeholder="Enter your phone number"
                                         />
                                     </div>
                                 </div>
@@ -385,7 +337,6 @@ const AdminSettingsPage = () => {
                                         onChange={(e) =>
                                             setProfile({ ...profile, address: e.target.value })
                                         }
-                                        placeholder="Enter your address"
                                     />
                                 </div>
                                 <Button 
@@ -424,7 +375,6 @@ const AdminSettingsPage = () => {
                                             setPasswords({ ...passwords, current: e.target.value })
                                         }
                                         required
-                                        placeholder="Enter current password"
                                     />
                                 </div>
                                 <div className="space-y-2">
@@ -437,8 +387,6 @@ const AdminSettingsPage = () => {
                                             setPasswords({ ...passwords, new: e.target.value })
                                         }
                                         required
-                                        placeholder="Enter new password"
-                                        minLength={6}
                                     />
                                 </div>
                                 <div className="space-y-2">
@@ -451,7 +399,6 @@ const AdminSettingsPage = () => {
                                             setPasswords({ ...passwords, confirm: e.target.value })
                                         }
                                         required
-                                        placeholder="Confirm new password"
                                     />
                                 </div>
                                 <Button 
@@ -464,7 +411,7 @@ const AdminSettingsPage = () => {
                                     }
                                 >
                                     {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                    Change Password
+                                    Edit Password
                                 </Button>
                                 {(!passwords.current || !passwords.new || !passwords.confirm) && (
                                     <p className="text-sm text-muted-foreground mt-2">
@@ -480,7 +427,7 @@ const AdminSettingsPage = () => {
                 <TabsContent value="security">
                     <Card>
                         <CardHeader>
-                            <CardTitle>Two‑Factor Authentication (2FA)</CardTitle>
+                            <CardTitle>Two‑Factor Authentication (TOTP)</CardTitle>
                             <Badge variant={totpEnabled ? 'default' : 'secondary'}>
                                 {totpEnabled ? 'Enabled' : 'Disabled'}
                             </Badge>
@@ -490,7 +437,7 @@ const AdminSettingsPage = () => {
                             {!totpEnabled && !totpSecret && (
                                 <div>
                                     <p className="text-sm text-muted-foreground mb-4">
-                                        Use Google Authenticator or similar app for secure login.
+                                        Use Google Authenticator for secure login.
                                     </p>
                                     <Button onClick={enableTOTP} disabled={loading}>
                                         {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -503,26 +450,19 @@ const AdminSettingsPage = () => {
                             {totpSecret && (
                                 <div className="space-y-6">
                                     <div className="flex justify-center">
-                                        {otpUrl ? (
-                                            <QRCodeSVG value={otpUrl} size={192} />
-                                        ) : (
-                                            <QRCodeFallback value={totpSecret.secretKey} size={192} />
-                                        )}
+                                        <QRCodeSVG value={otpUrl} size={192} />
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>Manual Setup Code</Label>
+                                        <Label>Manual Code</Label>
                                         <div className="flex gap-2">
                                             <Input value={totpSecret.secretKey} readOnly />
-                                            <Button size="icon" onClick={copySecret} variant="outline">
+                                            <Button size="icon" onClick={copySecret}>
                                                 <Copy className="h-4 w-4" />
                                             </Button>
                                         </div>
-                                        <p className="text-xs text-muted-foreground">
-                                            Use this code if you can't scan the QR code
-                                        </p>
                                     </div>
                                     <div className="space-y-2">
-                                        <Label>Enter 6‑digit verification code</Label>
+                                        <Label>Enter 6‑digit code</Label>
                                         <div className="flex gap-2">
                                             <Input
                                                 placeholder="123456"
@@ -531,11 +471,10 @@ const AdminSettingsPage = () => {
                                                     setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))
                                                 }
                                                 maxLength={6}
-                                                className="text-center text-lg font-mono"
                                             />
                                             <Button
                                                 onClick={verifyTOTP}
-                                                disabled={verifyingTotp || totpCode.length !== 6}
+                                                disabled={verifyingTotp || totpCode.length < 6}
                                             >
                                                 {verifyingTotp ? (
                                                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -551,7 +490,7 @@ const AdminSettingsPage = () => {
                             {totpEnabled && !totpSecret && (
                                 <div>
                                     <p className="text-sm text-green-600 mb-4">
-                                        2FA is active. You will be prompted for a verification code on login.
+                                        2FA is active. You will be prompted on login.
                                     </p>
                                     <Button variant="destructive" onClick={disableTOTP} disabled={loading}>
                                         {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
