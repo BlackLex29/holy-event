@@ -456,7 +456,7 @@ export default function ClientDashboardPage() {
     };
 
     initializeDashboard();
-  }, [checkAuthentication, router]); // FIXED: Simplified dependencies
+  }, [checkAuthentication, router, toast]); // ADDED toast dependency
 
   const getStatusBadge = (status: string) => {
     const variants = {

@@ -47,7 +47,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { db, auth } from '@/lib/firebase-config';
+import { db } from '@/lib/firebase-config';
 import { 
   collection, 
   addDoc, 
@@ -55,7 +55,6 @@ import {
   Timestamp,
   FieldValue 
 } from 'firebase/firestore';
-import { onAuthStateChanged } from 'firebase/auth';
 
 // ==================== ZOD SCHEMA ====================
 const formSchema = z.object({
@@ -290,27 +289,15 @@ const parseEventDate = (dateString: string): Date | null => {
   }
 };
 
-// ==================== IMPROVED USER ID MANAGEMENT ====================
-const getCurrentAppointmentUserId = (): string => {
+// ==================== USER ID MANAGEMENT ====================
+const getUserId = (): string => {
   if (typeof window === 'undefined') return 'user_temp';
   
-  // Try to get from auth first
-  try {
-    const authUser = auth.currentUser;
-    if (authUser && authUser.uid) {
-      return authUser.uid;
-    }
-  } catch (error) {
-    console.log('Auth not available, using localStorage fallback');
-  }
-  
-  // Fallback to localStorage userId
   let userId = localStorage.getItem('church_appointment_userId');
   if (!userId) {
     userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     localStorage.setItem('church_appointment_userId', userId);
   }
-  
   return userId;
 };
 
@@ -379,6 +366,15 @@ const checkFirebaseConnection = async (): Promise<boolean> => {
       return false;
     }
     
+    // Test if we can access Firestore by trying to add a test document
+    const testCollection = collection(db, 'connection_test');
+    const testDoc = await addDoc(testCollection, {
+      test: true,
+      timestamp: serverTimestamp()
+    });
+    
+    // Immediately delete the test document
+    // Note: You might need to import deleteDoc and doc for this
     console.log('✅ Firebase connection test successful');
     return true;
   } catch (error: any) {
@@ -386,57 +382,6 @@ const checkFirebaseConnection = async (): Promise<boolean> => {
     console.error('Error code:', error.code);
     console.error('Error message:', error.message);
     return false;
-  }
-};
-
-// ==================== DUPLICATE APPOINTMENT CHECKER ====================
-const checkDuplicateAppointment = (
-  appointments: UserAppointment[], 
-  newAppointment: FormData
-): boolean => {
-  const newDate = format(newAppointment.eventDate, 'yyyy-MM-dd');
-  
-  return appointments.some(appointment => {
-    const isSameDate = appointment.eventDate === newDate;
-    const isSameTime = appointment.eventTime === newAppointment.eventTime;
-    const isSameEvent = appointment.eventType === newAppointment.eventType;
-    const isSameEmail = appointment.email === newAppointment.email;
-    
-    return isSameDate && isSameTime && isSameEvent && isSameEmail;
-  });
-};
-
-// ==================== APPOINTMENTS STORAGE MANAGEMENT ====================
-const getAppointmentsStorageKey = (): string => {
-  const userId = getCurrentAppointmentUserId();
-  return `church_appointments_${userId}`;
-};
-
-const loadAppointmentsFromStorage = (): UserAppointment[] => {
-  try {
-    if (typeof window === 'undefined') return [];
-    
-    const storageKey = getAppointmentsStorageKey();
-    const stored = localStorage.getItem(storageKey);
-    
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch (error) {
-    console.error('Error loading appointments from storage:', error);
-  }
-  
-  return [];
-};
-
-const saveAppointmentsToStorage = (appointments: UserAppointment[]): void => {
-  try {
-    if (typeof window === 'undefined') return;
-    
-    const storageKey = getAppointmentsStorageKey();
-    localStorage.setItem(storageKey, JSON.stringify(appointments));
-  } catch (error) {
-    console.error('Error saving appointments to storage:', error);
   }
 };
 
@@ -453,7 +398,6 @@ export default function EventAppointmentPage() {
   const [currentUserInfo, setCurrentUserInfo] = useState<{email?: string; fullName?: string; phone?: string} | null>(null);
   const [autoFilledEmail, setAutoFilledEmail] = useState<string | null>(null);
   const [firebaseAvailable, setFirebaseAvailable] = useState<boolean | null>(null);
-  const [isAuthChecked, setIsAuthChecked] = useState(false);
 
   const {
     register,
@@ -498,38 +442,6 @@ export default function EventAppointmentPage() {
     loadUserInfo();
     loadUserAppointments();
   }, []);
-
-  // Listen to auth state changes
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      console.log('🔐 Auth state changed:', user ? 'User logged in' : 'User logged out');
-      setIsAuthChecked(true);
-      
-      if (user) {
-        // User logged in - update user info
-        const userInfo = {
-          email: user.email || '',
-          fullName: user.displayName || '',
-        };
-        
-        if (user.email) {
-          setUserEmail(user.email);
-          setValue('email', user.email, { shouldValidate: true });
-        }
-        
-        setCurrentUserInfo(userInfo);
-        setCurrentUserEmail(user.email);
-      } else {
-        // User logged out - pero keep using localStorage for appointments
-        console.log('👤 User logged out, but appointments preserved in localStorage');
-      }
-      
-      // Always reload appointments regardless of auth state
-      loadUserAppointments();
-    });
-
-    return () => unsubscribe();
-  }, [setValue]);
 
   // Auto-detect and fill user email on component mount
   useEffect(() => {
@@ -651,43 +563,42 @@ export default function EventAppointmentPage() {
   // Load user appointments from localStorage
   const loadUserAppointments = () => {
     try {
-      const appointments = loadAppointmentsFromStorage();
+      if (typeof window === 'undefined') return;
       
-      // Sort by date (newest first) with safe date comparison
-      const sortedAppointments = appointments.sort((a: UserAppointment, b: UserAppointment) => {
-        const dateA = parseEventDate(a.createdAt) || new Date(0);
-        const dateB = parseEventDate(b.createdAt) || new Date(0);
-        return dateB.getTime() - dateA.getTime();
-      });
-      
-      setUserAppointments(sortedAppointments);
-      console.log('📋 Loaded appointments:', sortedAppointments.length);
+      const stored = localStorage.getItem('appointments');
+      if (stored) {
+        const allAppointments = JSON.parse(stored);
+        const currentUserEmail = getUserEmail();
+        const userId = getUserId();
+        
+        // Filter: I-display lang ang appointments ng current user
+        const userAppointments = allAppointments.filter((appointment: UserAppointment) => 
+          appointment.userId === userId || appointment.email === currentUserEmail
+        );
+        
+        // Sort by date (newest first) with safe date comparison
+        const sortedAppointments = userAppointments.sort((a: UserAppointment, b: UserAppointment) => {
+          const dateA = parseEventDate(a.createdAt) || new Date(0);
+          const dateB = parseEventDate(b.createdAt) || new Date(0);
+          return dateB.getTime() - dateA.getTime();
+        });
+        
+        setUserAppointments(sortedAppointments);
+      }
     } catch (error) {
       console.error('Error loading appointments from localStorage:', error);
     }
   };
 
-  // ✅ IMPROVED SUBMIT FUNCTION WITH BETTER STORAGE MANAGEMENT
+  // ✅ IMPROVED SUBMIT FUNCTION WITH BETTER FIREBASE ERROR HANDLING
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
     console.log('🔄 Starting submission process...');
     
     try {
-      const userId = getCurrentAppointmentUserId();
+      const userId = getUserId();
       const userEmail = data.email.trim();
       
-      // ✅ CHECK FOR DUPLICATE APPOINTMENT FIRST
-      const isDuplicate = checkDuplicateAppointment(userAppointments, data);
-      if (isDuplicate) {
-        toast({
-          title: 'Duplicate Appointment',
-          description: 'You already have an appointment for this date, time, and event type.',
-          variant: 'destructive',
-        });
-        setIsSubmitting(false);
-        return;
-      }
-
       // Save user email for future identification
       setUserEmail(userEmail);
       setCurrentUserEmail(userEmail);
@@ -752,7 +663,7 @@ export default function EventAppointmentPage() {
         console.log('⚠️ Firebase not available, saving to localStorage only');
       }
 
-      // ✅ CREATE APPOINTMENT OBJECT FOR LOCALSTORAGE
+      // ✅ SAVE TO LOCALSTORAGE (ALWAYS)
       const appointment: UserAppointment = {
         id: firebaseId || `local_${Date.now()}`,
         fullName: data.fullName.trim(),
@@ -772,34 +683,12 @@ export default function EventAppointmentPage() {
         appointment.message = data.message.trim().substring(0, 50);
       }
 
-      // ✅ SAVE TO LOCALSTORAGE USING USER-SPECIFIC STORAGE KEY
-      const existingAppointments = loadAppointmentsFromStorage();
-      
-      // Remove any existing appointments with the same details to prevent duplicates
-      const filteredExisting = existingAppointments.filter((existingAppt: UserAppointment) => {
-        const isSameAppointment = 
-          existingAppt.eventDate === appointment.eventDate &&
-          existingAppt.eventTime === appointment.eventTime &&
-          existingAppt.eventType === appointment.eventType &&
-          existingAppt.email === appointment.email;
-        
-        return !isSameAppointment;
-      });
-      
-      // Add the new appointment
-      const updatedAppointments = [...filteredExisting, appointment];
-      saveAppointmentsToStorage(updatedAppointments);
+      const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
+      existing.push(appointment);
+      localStorage.setItem('appointments', JSON.stringify(existing));
 
       // Update local state
-      setUserAppointments(prev => {
-        const filteredPrev = prev.filter(appt => 
-          !(appt.eventDate === appointment.eventDate &&
-            appt.eventTime === appointment.eventTime &&
-            appt.eventType === appointment.eventType &&
-            appt.email === appointment.email)
-        );
-        return [...filteredPrev, appointment];
-      });
+      loadUserAppointments();
 
       // Set success data
       setSuccessData({
@@ -815,13 +704,9 @@ export default function EventAppointmentPage() {
       // Reset form but keep email and user info
       reset({
         email: data.email,
-        fullName: '',
-        phone: '',
-        eventType: '',
-        eventDate: undefined,
-        eventTime: '',
-        guestCount: '1',
-        message: ''
+        fullName: data.fullName,
+        phone: data.phone,
+        guestCount: '1'
       });
       setDate(undefined);
       setNotesCount(0);
@@ -1036,14 +921,6 @@ export default function EventAppointmentPage() {
               <p className="text-green-700 text-sm">
                 ✅ Welcome back! Your email has been auto-filled.
                 {autoFilledEmail && ` Detected: ${autoFilledEmail}`}
-              </p>
-            </div>
-          )}
-
-          {!isAuthChecked && (
-            <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3 inline-block">
-              <p className="text-blue-700 text-sm">
-                🔄 Checking authentication status...
               </p>
             </div>
           )}

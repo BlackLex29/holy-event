@@ -45,7 +45,7 @@ export const AppSidebar = () => {
     { title: 'Profile', icon: Settings, href: `${baseRoute}/settings` },
   ];
 
-  // === ADMIN MENU: NOW WITH DASHBOARD AT TOP ===
+  // === ADMIN MENU ===
   const adminMenuItems = [
     { title: 'Dashboard', icon: LayoutDashboard, href: '/a/dashboard' },
     { title: 'Manage Users', icon: Users, href: '/a/users' },
@@ -54,63 +54,61 @@ export const AppSidebar = () => {
     { title: 'Profile', icon: Settings, href: '/a/settings' },
   ];
 
-  // ✅ IMPROVED LOGOUT FUNCTION - PRESERVE APPOINTMENTS DATA
+  // ✅ IMPROVED LOGOUT FUNCTION - PRESERVE ALL USER DATA
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
-      // 1. BACKUP IMPORTANT DATA FIRST
-      const appointmentsBackup: {[key: string]: any} = {};
-      const eventsBackup: {[key: string]: any} = {};
+      // 1. BACKUP ALL USER DATA BEFORE LOGOUT
+      const userDataBackup: {[key: string]: string} = {};
       
-      // Backup all appointments data
+      // Backup all user-related data including appointments
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('church_appointments_')) {
-          appointmentsBackup[key] = localStorage.getItem(key);
-        }
-        if (key && key.startsWith('events_')) {
-          eventsBackup[key] = localStorage.getItem(key);
+        if (key && (
+          key.startsWith('church_') || 
+          key.startsWith('appointment') ||
+          key.startsWith('event') ||
+          key === 'userAppointments' ||
+          key === 'userEvents' ||
+          key.includes('dashboard') ||
+          key.includes('userData')
+        )) {
+          userDataBackup[key] = localStorage.getItem(key) || '';
         }
       }
+
+      console.log('📦 Backup created for:', Object.keys(userDataBackup));
 
       // 2. Sign out from Firebase
       if (auth.currentUser) {
         await signOut(auth);
       }
 
-      // 3. CLEAR ONLY AUTHENTICATION DATA, NOT APPOINTMENTS
-      const keysToRemove = [
+      // 3. CLEAR ONLY AUTHENTICATION DATA
+      const authKeysToRemove = [
         'userRole',
         'authToken', 
         'userEmail',
         'currentUser',
         'firebaseUID',
-        'church_appointment_userEmail', // Email lang, hindi userId
-        'church_appointment_userFullName',
-        'church_appointment_userPhone',
         'loginSecurityState',
         'loginAttempts',
-        'userData',
-        'userProfile'
+        // HUWAG BURAHAIN: church_appointment_userId, appointments, events
       ];
 
-      keysToRemove.forEach(key => {
+      authKeysToRemove.forEach(key => {
         localStorage.removeItem(key);
       });
 
-      // 4. RESTORE APPOINTMENTS DATA
-      Object.keys(appointmentsBackup).forEach(key => {
-        localStorage.setItem(key, appointmentsBackup[key]);
+      // 4. RESTORE USER DATA IMMEDIATELY
+      Object.keys(userDataBackup).forEach(key => {
+        localStorage.setItem(key, userDataBackup[key]);
       });
 
-      Object.keys(eventsBackup).forEach(key => {
-        localStorage.setItem(key, eventsBackup[key]);
-      });
-
-      // 5. Clear sessionStorage (walang appointments dito usually)
+      // 5. Clear sessionStorage (walang important data dito usually)
       sessionStorage.clear();
 
-      // 6. Clear cookies (if any)
+      // 6. Clear cookies
       document.cookie.split(';').forEach(cookie => {
         const eqPos = cookie.indexOf('=');
         const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
@@ -120,19 +118,20 @@ export const AppSidebar = () => {
       // 7. Show success message
       toast({
         title: 'Logged out successfully',
-        description: 'Your appointments and events have been preserved.',
+        description: 'Your appointments and data have been preserved.',
       });
 
-      // 8. Redirect to login page
-      router.push('/login');
+      // 8. Redirect to login
+      setTimeout(() => {
+        router.push('/login');
+      }, 500);
       
     } catch (error) {
       console.error('Logout error:', error);
       
-      // Fallback: Clear only auth data
-      const authKeys = ['userRole', 'authToken', 'userEmail', 'currentUser', 'firebaseUID'];
-      authKeys.forEach(key => localStorage.removeItem(key));
-      sessionStorage.clear();
+      // Fallback: Minimal cleanup
+      const minimalAuthKeys = ['userRole', 'authToken', 'userEmail', 'currentUser'];
+      minimalAuthKeys.forEach(key => localStorage.removeItem(key));
       
       toast({
         title: 'Signed out',
@@ -147,17 +146,15 @@ export const AppSidebar = () => {
 
   return (
     <Sidebar>
-      {/* Header */}
       <SidebarHeader className="p-4 border-b">
         <h2 className="text-lg font-semibold flex items-center gap-2">
           <Church className="w-5 h-5" />
-          {isAdmin ? 'Holy Events' : 'Holy Client Portal'}
+          {isAdmin ? 'Holy Events Admin' : 'Holy Client Portal'}
         </h2>
       </SidebarHeader>
 
       <SidebarContent className="pt-2">
-        {/* ADMIN MENU */}
-        {isAdmin && (
+        {isAdmin ? (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
@@ -177,10 +174,7 @@ export const AppSidebar = () => {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-        )}
-
-        {/* CLIENT MENU */}
-        {!isAdmin && (
+        ) : (
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
@@ -203,7 +197,6 @@ export const AppSidebar = () => {
         )}
       </SidebarContent>
 
-      {/* Logout */}
       <SidebarFooter className="p-4 border-t">
         <SidebarMenu>
           <SidebarMenuItem>
