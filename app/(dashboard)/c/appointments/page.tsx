@@ -77,7 +77,7 @@ const formSchema = z.object({
       return count >= 1 && count <= 1000;
     }, 'Guest count must be between 1 and 1000'),
   message: z.string()
-    .max(50, 'Additional notes cannot exceed 50 characters')
+    .max(200, 'Additional notes cannot exceed 50 characters')
     .optional(),
 });
 
@@ -366,15 +366,6 @@ const checkFirebaseConnection = async (): Promise<boolean> => {
       return false;
     }
     
-    // Test if we can access Firestore by trying to add a test document
-    const testCollection = collection(db, 'connection_test');
-    const testDoc = await addDoc(testCollection, {
-      test: true,
-      timestamp: serverTimestamp()
-    });
-    
-    // Immediately delete the test document
-    // Note: You might need to import deleteDoc and doc for this
     console.log('✅ Firebase connection test successful');
     return true;
   } catch (error: any) {
@@ -383,6 +374,23 @@ const checkFirebaseConnection = async (): Promise<boolean> => {
     console.error('Error message:', error.message);
     return false;
   }
+};
+
+// ==================== DUPLICATE APPOINTMENT CHECKER ====================
+const checkDuplicateAppointment = (
+  appointments: UserAppointment[], 
+  newAppointment: FormData
+): boolean => {
+  const newDate = format(newAppointment.eventDate, 'yyyy-MM-dd');
+  
+  return appointments.some(appointment => {
+    const isSameDate = appointment.eventDate === newDate;
+    const isSameTime = appointment.eventTime === newAppointment.eventTime;
+    const isSameEvent = appointment.eventType === newAppointment.eventType;
+    const isSameEmail = appointment.email === newAppointment.email;
+    
+    return isSameDate && isSameTime && isSameEvent && isSameEmail;
+  });
 };
 
 // ==================== MAIN COMPONENT ====================
@@ -590,7 +598,7 @@ export default function EventAppointmentPage() {
     }
   };
 
-  // ✅ IMPROVED SUBMIT FUNCTION WITH BETTER FIREBASE ERROR HANDLING
+  // ✅ IMPROVED SUBMIT FUNCTION WITH DUPLICATE CHECK
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
     console.log('🔄 Starting submission process...');
@@ -599,6 +607,18 @@ export default function EventAppointmentPage() {
       const userId = getUserId();
       const userEmail = data.email.trim();
       
+      // ✅ CHECK FOR DUPLICATE APPOINTMENT FIRST
+      const isDuplicate = checkDuplicateAppointment(userAppointments, data);
+      if (isDuplicate) {
+        toast({
+          title: 'Duplicate Appointment',
+          description: 'You already have an appointment for this date, time, and event type.',
+          variant: 'destructive',
+        });
+        setIsSubmitting(false);
+        return;
+      }
+
       // Save user email for future identification
       setUserEmail(userEmail);
       setCurrentUserEmail(userEmail);
@@ -663,7 +683,7 @@ export default function EventAppointmentPage() {
         console.log('⚠️ Firebase not available, saving to localStorage only');
       }
 
-      // ✅ SAVE TO LOCALSTORAGE (ALWAYS)
+      // ✅ CREATE APPOINTMENT OBJECT FOR LOCALSTORAGE
       const appointment: UserAppointment = {
         id: firebaseId || `local_${Date.now()}`,
         fullName: data.fullName.trim(),
@@ -683,12 +703,34 @@ export default function EventAppointmentPage() {
         appointment.message = data.message.trim().substring(0, 50);
       }
 
+      // ✅ SAVE TO LOCALSTORAGE (REPLACE ARRAY INSTEAD OF PUSH)
       const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
-      existing.push(appointment);
-      localStorage.setItem('appointments', JSON.stringify(existing));
+      
+      // Remove any existing appointments with the same details to prevent duplicates
+      const filteredExisting = existing.filter((existingAppt: UserAppointment) => {
+        const isSameAppointment = 
+          existingAppt.eventDate === appointment.eventDate &&
+          existingAppt.eventTime === appointment.eventTime &&
+          existingAppt.eventType === appointment.eventType &&
+          existingAppt.email === appointment.email;
+        
+        return !isSameAppointment;
+      });
+      
+      // Add the new appointment
+      const updatedAppointments = [...filteredExisting, appointment];
+      localStorage.setItem('appointments', JSON.stringify(updatedAppointments));
 
       // Update local state
-      loadUserAppointments();
+      setUserAppointments(prev => {
+        const filteredPrev = prev.filter(appt => 
+          !(appt.eventDate === appointment.eventDate &&
+            appt.eventTime === appointment.eventTime &&
+            appt.eventType === appointment.eventType &&
+            appt.email === appointment.email)
+        );
+        return [...filteredPrev, appointment];
+      });
 
       // Set success data
       setSuccessData({
@@ -704,9 +746,13 @@ export default function EventAppointmentPage() {
       // Reset form but keep email and user info
       reset({
         email: data.email,
-        fullName: data.fullName,
-        phone: data.phone,
-        guestCount: '1'
+        fullName: '',
+        phone: '',
+        eventType: '',
+        eventDate: undefined,
+        eventTime: '',
+        guestCount: '1',
+        message: ''
       });
       setDate(undefined);
       setNotesCount(0);
@@ -1181,8 +1227,8 @@ export default function EventAppointmentPage() {
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <Label>Additional Notes (Optional)</Label>
-                      <span className={`text-xs ${notesCount > 50 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                        {notesCount}/50
+                      <span className={`text-xs ${notesCount > 200 ? 'text-destructive' : 'text-muted-foreground'}`}>
+                        {notesCount}/200
                       </span>
                     </div>
                     <Textarea
@@ -1190,13 +1236,13 @@ export default function EventAppointmentPage() {
                       placeholder="e.g. Godparents, special intention, specific requests..."
                       rows={4}
                       disabled={isSubmitting}
-                      maxLength={50}
+                      maxLength={200}
                     />
                     {errors.message && (
                       <p className="text-sm text-destructive">{errors.message.message}</p>
                     )}
                     <p className="text-xs text-muted-foreground">
-                      Maximum 50 characters
+                      Maximum 200 characters
                     </p>
                   </div>
 

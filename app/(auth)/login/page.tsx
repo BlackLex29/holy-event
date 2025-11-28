@@ -13,6 +13,7 @@ import {
     getMultiFactorResolver,
     TotpMultiFactorGenerator,
     sendPasswordResetEmail,
+    onAuthStateChanged
 } from 'firebase/auth';
 import { doc, getDoc, updateDoc, setDoc, serverTimestamp, collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase-config';
@@ -53,7 +54,7 @@ const LoginPage = () => {
     const [showForgotPassword, setShowForgotPassword] = useState(false);
     const [resetEmail, setResetEmail] = useState('');
     const [resetLoading, setResetLoading] = useState(false);
-    const [emailSent, setEmailSent] = useState(false); // NEW: Track if email has been sent
+    const [emailSent, setEmailSent] = useState(false);
     
     // Brute force protection state
     const [failedAttempts, setFailedAttempts] = useState(0);
@@ -203,23 +204,41 @@ const LoginPage = () => {
         }
     };
 
-    // Check if user is already logged in
+    // ✅ FIXED: Check if user is already logged in using Firebase Auth State
     useEffect(() => {
-        const checkAuthState = () => {
-            const userRole = localStorage.getItem('userRole');
-            const authToken = localStorage.getItem('authToken');
-            const userId = localStorage.getItem('church_appointment_userId');
-            
-            if (userRole && authToken && userId) {
-                if (userRole === 'admin') {
-                    router.push('/a/dashboard');
-                } else {
-                    router.push('/c/dashboard');
-                }
-            }
-        };
+        const unsubscribe = onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                console.log('✅ User already authenticated:', user.email);
+                try {
+                    const userDoc = await getDoc(doc(db, 'users', user.uid));
+                    let role = 'client';
+                    
+                    if (userDoc.exists()) {
+                        const userData = userDoc.data();
+                        role = userData.role || 'client';
+                    }
 
-        checkAuthState();
+                    await saveUserToLocalStorage(user.uid, user.email || '', role);
+                    
+                    // Redirect based on role
+                    if (role === 'admin') {
+                        router.push('/a/dashboard');
+                    } else {
+                        router.push('/c/dashboard');
+                    }
+                } catch (error) {
+                    console.error('Error checking user role:', error);
+                    setError('Error loading user profile. Please try logging in again.');
+                }
+            } else {
+                console.log('❌ No authenticated user found');
+                // Clear any stale authentication data
+                localStorage.removeItem('userRole');
+                localStorage.removeItem('authToken');
+            }
+        });
+
+        return () => unsubscribe();
     }, [router]);
 
     const handleChange = (field: string, value: string | boolean) => {
@@ -375,19 +394,24 @@ const LoginPage = () => {
         }
     };
 
+    // ✅ IMPROVED: Save user data only after successful authentication
     const saveUserToLocalStorage = async (uid: string, email: string, role: string) => {
         try {
+            // Generate new user ID if not exists
             let userId = localStorage.getItem('church_appointment_userId');
             if (!userId) {
                 userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
                 localStorage.setItem('church_appointment_userId', userId);
             }
             
+            // Save authentication data
             localStorage.setItem('userRole', role);
             localStorage.setItem('authToken', 'firebase-auth-' + Date.now());
             localStorage.setItem('userEmail', email);
             localStorage.setItem('church_appointment_userEmail', email);
+            localStorage.setItem('firebaseUID', uid);
             
+            // Save user profile data
             const userData = {
                 name: email.split('@')[0] || 'Parishioner',
                 email: email,
@@ -397,12 +421,14 @@ const LoginPage = () => {
             };
             localStorage.setItem('currentUser', JSON.stringify(userData));
             
-            console.log('✅ User data saved to localStorage:', { userId, role, email });
+            console.log('✅ User data saved to localStorage:', { userId, role, email, uid });
         } catch (error) {
             console.error('Error saving user to localStorage:', error);
+            throw error;
         }
     };
 
+    // ✅ IMPROVED: Redirect user after successful authentication
     const redirectUser = async (uid: string, email: string) => {
         try {
             const userDoc = await getDoc(doc(db, 'users', uid));
@@ -412,6 +438,7 @@ const LoginPage = () => {
                 const userData = userDoc.data();
                 role = userData.role || 'client';
                 
+                // Update last login
                 await updateDoc(doc(db, 'users', uid), {
                     lastLogin: serverTimestamp(),
                     status: 'active',
@@ -420,21 +447,27 @@ const LoginPage = () => {
                 });
             }
 
+            // Save to localStorage
             await saveUserToLocalStorage(uid, email, role);
 
+            // Redirect based on role
             if (role === 'admin') {
+                console.log('🔄 Redirecting to admin dashboard');
                 router.push('/a/dashboard');
             } else {
+                console.log('🔄 Redirecting to client dashboard');
                 router.push('/c/dashboard');
             }
         } catch (error) {
             console.error('Error redirecting user:', error);
             setError('Error loading user profile. Using default access.');
+            // Fallback: save basic user data and redirect to client dashboard
             await saveUserToLocalStorage(uid, email, 'client');
             router.push('/c/dashboard');
         }
     };
 
+    // ✅ IMPROVED: Main login handler
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
@@ -448,20 +481,28 @@ const LoginPage = () => {
         setLoading(true);
 
         try {
+            console.log('🔄 Attempting Firebase authentication...');
             const userCredential = await signInWithEmailAndPassword(
                 auth,
                 formData.email,
                 formData.password
             );
             
+            // Reset security state on successful login
             resetSecurityState();
             
+            // Track successful attempt
             await trackLoginAttempt(formData.email, true);
             trackLocalLoginAttempt(formData.email, true);
             
             const user = userCredential.user;
-            console.log('✅ Firebase login successful:', { uid: user.uid, email: user.email });
+            console.log('✅ Firebase login successful:', { 
+                uid: user.uid, 
+                email: user.email,
+                emailVerified: user.emailVerified 
+            });
             
+            // Handle email verification if needed
             if (!user.emailVerified) {
                 console.log('📧 Auto-verifying email for user:', user.email);
                 try {
@@ -475,10 +516,13 @@ const LoginPage = () => {
                 }
             }
             
+            // Redirect user
             await redirectUser(user.uid, user.email || formData.email);
+            
         } catch (err: any) {
             console.error('❌ Login error:', err.code, err.message);
             
+            // Track failed attempt
             await trackLoginAttempt(formData.email, false, err.code);
             trackLocalLoginAttempt(formData.email, false);
             
@@ -510,7 +554,7 @@ const LoginPage = () => {
         }
     };
 
-    // SIMPLIFIED FORGOT PASSWORD - WALANG VERIFICATION CODE
+    // Forgot Password Handler
     const handleForgotPassword = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
@@ -540,7 +584,7 @@ const LoginPage = () => {
                 console.error('Error saving reset request to database:', dbError);
             }
             
-            // MARK AS EMAIL SENT - DISABLE EDITING
+            // Mark as email sent - disable editing
             setEmailSent(true);
             setSuccess('Password reset email sent! Please check your inbox AND spam folder for the reset link. The link will expire in 1 hour.');
             
@@ -617,7 +661,7 @@ const LoginPage = () => {
         setError('');
         setSuccess('');
         setResetEmail('');
-        setEmailSent(false); // RESET EMAIL SENT STATE
+        setEmailSent(false);
     };
 
     // Check if currently locked out
@@ -672,7 +716,7 @@ const LoginPage = () => {
         );
     };
 
-    // SIMPLIFIED FORGOT PASSWORD SCREEN - DISABLED AFTER SENDING
+    // Forgot Password Screen
     if (showForgotPassword) {
         return (
             <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -691,7 +735,6 @@ const LoginPage = () => {
 
                     <CardContent className="p-6">
                         {!emailSent ? (
-                            // BEFORE EMAIL SENT - CAN STILL EDIT
                             <form onSubmit={handleForgotPassword} className="space-y-5">
                                 <div className="space-y-2">
                                     <Label htmlFor="resetEmail" className="text-sm font-medium">
@@ -748,7 +791,6 @@ const LoginPage = () => {
                                 </Button>
                             </form>
                         ) : (
-                            // AFTER EMAIL SENT - WAITING MODE
                             <div className="space-y-5">
                                 <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
                                     <div className="flex items-start gap-3">
