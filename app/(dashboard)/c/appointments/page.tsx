@@ -71,13 +71,13 @@ const formSchema = z.object({
   ),
   eventTime: z.string().min(1, 'Please select a time'),
   guestCount: z.string()
-    .min(1, 'Please enter number of capacity')
+    .min(1, 'Please enter number of guests')
     .refine((val) => {
       const count = parseInt(val);
       return count >= 1 && count <= 1000;
     }, 'Guest count must be between 1 and 1000'),
   message: z.string()
-    .max(200, 'Additional notes cannot exceed 50 characters')
+    .max(200, 'Additional notes cannot exceed 200 characters')
     .optional(),
 });
 
@@ -146,6 +146,15 @@ const eventTypeMap: Record<string, string> = {
   baptism: 'Baptism',
   funeral: 'Funeral Mass',
   confirmation: 'Confirmation',
+};
+
+// ==================== AUTO-FILL NOTES TEMPLATES ====================
+const autoFillNotes: Record<string, string> = {
+  wedding: "Godparents: [List names here], Special requests: [Any specific requirements]",
+  baptism: "Godparents: [List names here], Child's name: [Full name], Age: [Age]",
+  funeral: "Deceased name: [Full name], Age: [Age], Family requests: [Specific arrangements]",
+  mass: "Special intention: [e.g., For good health, Thanksgiving], Requested by: [Your name or family]",
+  confirmation: "Candidate name: [Full name], Sponsor: [Sponsor name], Age: [Age]"
 };
 
 // ==================== SERVICE REQUIREMENTS ====================
@@ -385,6 +394,21 @@ const checkFirebaseConnection = async (): Promise<boolean> => {
   }
 };
 
+// ==================== DUPLICATE APPOINTMENT CHECKER ====================
+const checkDuplicateAppointment = (
+  appointments: UserAppointment[], 
+  newAppointment: FormData
+): boolean => {
+  const newDate = format(newAppointment.eventDate, 'yyyy-MM-dd');
+  
+  return appointments.some(appointment => 
+    appointment.eventType === newAppointment.eventType &&
+    appointment.eventDate === newDate &&
+    appointment.eventTime === newAppointment.eventTime &&
+    appointment.fullName.toLowerCase() === newAppointment.fullName.toLowerCase()
+  );
+};
+
 // ==================== MAIN COMPONENT ====================
 export default function EventAppointmentPage() {
   const { toast } = useToast();
@@ -398,6 +422,7 @@ export default function EventAppointmentPage() {
   const [currentUserInfo, setCurrentUserInfo] = useState<{email?: string; fullName?: string; phone?: string} | null>(null);
   const [autoFilledEmail, setAutoFilledEmail] = useState<string | null>(null);
   const [firebaseAvailable, setFirebaseAvailable] = useState<boolean | null>(null);
+  const [hasAutoFilledNotes, setHasAutoFilledNotes] = useState(false);
 
   const {
     register,
@@ -457,6 +482,30 @@ export default function EventAppointmentPage() {
       });
     }
   }, [setValue, toast]);
+
+  // Auto-fill notes when event type changes
+  useEffect(() => {
+    if (eventType && !hasAutoFilledNotes && !message) {
+      const template = autoFillNotes[eventType];
+      if (template) {
+        setValue('message', template, { shouldValidate: true });
+        setHasAutoFilledNotes(true);
+        
+        toast({
+          title: 'Notes Template Added!',
+          description: 'We added a template for your notes. Please fill in the details.',
+          variant: 'default',
+        });
+      }
+    }
+  }, [eventType, message, setValue, hasAutoFilledNotes, toast]);
+
+  // Reset auto-fill flag when event type is cleared
+  useEffect(() => {
+    if (!eventType) {
+      setHasAutoFilledNotes(false);
+    }
+  }, [eventType]);
 
   // Load user information from localStorage/auth
   const loadUserInfo = () => {
@@ -560,6 +609,12 @@ export default function EventAppointmentPage() {
     }
   };
 
+  // Clear auto-filled notes
+  const clearAutoFilledNotes = () => {
+    setValue('message', '', { shouldValidate: true });
+    setHasAutoFilledNotes(false);
+  };
+
   // Load user appointments from localStorage
   const loadUserAppointments = () => {
     try {
@@ -590,7 +645,7 @@ export default function EventAppointmentPage() {
     }
   };
 
-  // ✅ IMPROVED SUBMIT FUNCTION WITH BETTER FIREBASE ERROR HANDLING
+  // ✅ IMPROVED SUBMIT FUNCTION WITH DUPLICATE CHECK
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
     console.log('🔄 Starting submission process...');
@@ -599,6 +654,18 @@ export default function EventAppointmentPage() {
       const userId = getUserId();
       const userEmail = data.email.trim();
       
+      // Check for duplicate appointment
+      const isDuplicate = checkDuplicateAppointment(userAppointments, data);
+      if (isDuplicate) {
+        toast({
+          title: 'Duplicate Appointment',
+          description: 'You already have an appointment for this event, date, and time.',
+          variant: 'destructive',
+        });
+        setIsSubmitting(false);
+        return;
+      }
+
       // Save user email for future identification
       setUserEmail(userEmail);
       setCurrentUserEmail(userEmail);
@@ -626,9 +693,9 @@ export default function EventAppointmentPage() {
         userId: userId,
       };
 
-      // Add message only if it exists and trim to 50 characters
+      // Add message only if it exists and trim to 200 characters
       if (data.message && data.message.trim() !== '') {
-        appointmentData.message = data.message.trim().substring(0, 50);
+        appointmentData.message = data.message.trim().substring(0, 200);
       }
 
       console.log('📤 Form data prepared:', appointmentData);
@@ -680,7 +747,7 @@ export default function EventAppointmentPage() {
       };
 
       if (data.message && data.message.trim() !== '') {
-        appointment.message = data.message.trim().substring(0, 50);
+        appointment.message = data.message.trim().substring(0, 200);
       }
 
       const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
@@ -704,12 +771,17 @@ export default function EventAppointmentPage() {
       // Reset form but keep email and user info
       reset({
         email: data.email,
-        fullName: data.fullName,
-        phone: data.phone,
-        guestCount: '1'
+        fullName: '',
+        phone: '',
+        eventType: '',
+        eventDate: undefined,
+        eventTime: '',
+        guestCount: '1',
+        message: ''
       });
       setDate(undefined);
       setNotesCount(0);
+      setHasAutoFilledNotes(false);
 
       // Hide success message after 8 seconds
       setTimeout(() => {
@@ -1151,14 +1223,9 @@ export default function EventAppointmentPage() {
                     </div>
                   )}
 
-                  {/* GUESTS */}
+                  {/* GUESTS - INALIS ANG INDICATOR SA GILID */}
                   <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Label>Number of Capacity *</Label>
-                      <span className={`text-xs ${parseInt(guestCount || '0') > 1000 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                        {guestCount || '0'}/1000
-                      </span>
-                    </div>
+                    <Label>Number of Guests *</Label>
                     <Input 
                       {...register('guestCount')} 
                       type="number" 
@@ -1177,7 +1244,7 @@ export default function EventAppointmentPage() {
                     )}
                   </div>
 
-                  {/* MESSAGE */}
+                  {/* MESSAGE WITH AUTO-FILL */}
                   <div className="space-y-2">
                     <div className="flex justify-between items-center">
                       <Label>Additional Notes (Optional)</Label>
@@ -1185,13 +1252,34 @@ export default function EventAppointmentPage() {
                         {notesCount}/200
                       </span>
                     </div>
-                    <Textarea
-                      {...register('message')}
-                      placeholder="e.g. Godparents, special intention, specific requests..."
-                      rows={4}
-                      disabled={isSubmitting}
-                      maxLength={200}
-                    />
+                    <div className="relative">
+                      <Textarea
+                        {...register('message')}
+                        placeholder="e.g. Godparents, special intention, specific requests..."
+                        rows={4}
+                        disabled={isSubmitting}
+                        maxLength={200}
+                        className={hasAutoFilledNotes ? "border-blue-300 bg-blue-50/50" : ""}
+                      />
+                      {hasAutoFilledNotes && (
+                        <div className="absolute top-2 right-2">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={clearAutoFilledNotes}
+                            className="h-6 w-6 p-0 text-blue-600 hover:text-blue-800 hover:bg-blue-100"
+                          >
+                            <XCircle className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    {hasAutoFilledNotes && (
+                      <p className="text-xs text-blue-600 bg-blue-50 p-2 rounded">
+                        💡 We added a template for your notes. Fill in the details or clear it if not needed.
+                      </p>
+                    )}
                     {errors.message && (
                       <p className="text-sm text-destructive">{errors.message.message}</p>
                     )}

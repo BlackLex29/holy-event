@@ -26,12 +26,24 @@ import {
 import { useToast } from '@/components/ui/use-toast';
 import { signOut } from 'firebase/auth';
 import { auth } from '@/lib/firebase-config';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { Button } from '@/components/ui/button';
 
 export const AppSidebar = () => {
   const pathname = usePathname();
   const router = useRouter();
   const { toast } = useToast();
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   const isAdmin = pathname?.startsWith('/a/');
   const baseRoute = isAdmin ? '/a' : '/c';
@@ -141,78 +153,131 @@ export const AppSidebar = () => {
       router.push('/login');
     } finally {
       setIsLoggingOut(false);
+      setShowLogoutConfirm(false);
     }
   };
 
+  const openLogoutConfirm = () => {
+    setShowLogoutConfirm(true);
+  };
+
+  const closeLogoutConfirm = () => {
+    setShowLogoutConfirm(false);
+  };
+
   return (
-    <Sidebar>
-      <SidebarHeader className="p-4 border-b">
-        <h2 className="text-lg font-semibold flex items-center gap-2">
-          <Church className="w-5 h-5" />
-          {isAdmin ? 'Holy Events Admin' : 'Holy Client Portal'}
-        </h2>
-      </SidebarHeader>
+    <>
+      <Sidebar>
+        <SidebarHeader className="p-4 border-b">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <Church className="w-5 h-5" />
+            {isAdmin ? 'Holy Events Admin' : 'Holy Client Portal'}
+          </h2>
+        </SidebarHeader>
 
-      <SidebarContent className="pt-2">
-        {isAdmin ? (
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {adminMenuItems.map((item) => (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={pathname === item.href}
-                    >
-                      <Link href={item.href}>
-                        <item.icon className="w-4 h-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        ) : (
-          <SidebarGroup>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {clientMenuItems.map((item) => (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      asChild
-                      isActive={pathname === item.href}
-                    >
-                      <Link href={item.href}>
-                        <item.icon className="w-4 h-4" />
-                        <span>{item.title}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
-      </SidebarContent>
+        <SidebarContent className="pt-2">
+          {isAdmin ? (
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {adminMenuItems.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === item.href}
+                      >
+                        <Link href={item.href}>
+                          <item.icon className="w-4 h-4" />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ) : (
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {clientMenuItems.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={pathname === item.href}
+                      >
+                        <Link href={item.href}>
+                          <item.icon className="w-4 h-4" />
+                          <span>{item.title}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          )}
+        </SidebarContent>
 
-      <SidebarFooter className="p-4 border-t">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton asChild>
-              <button
-                onClick={handleLogout}
-                disabled={isLoggingOut}
-                className="w-full text-left flex items-center gap-2 text-red-600 hover:text-red-700 disabled:opacity-50 transition-colors duration-200"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>{isLoggingOut ? 'Logging out...' : 'Logout'}</span>
-              </button>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarFooter>
-    </Sidebar>
+        <SidebarFooter className="p-4 border-t">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild>
+                <button
+                  onClick={openLogoutConfirm}
+                  disabled={isLoggingOut}
+                  className="w-full text-left flex items-center gap-2 text-red-600 hover:text-red-700 disabled:opacity-50 transition-colors duration-200"
+                >
+                  <LogOut className="w-4 h-4" />
+                  <span>{isLoggingOut ? 'Logging out...' : 'Logout'}</span>
+                </button>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
+      </Sidebar>
+
+      {/* Logout Confirmation Dialog */}
+      <AlertDialog open={showLogoutConfirm} onOpenChange={setShowLogoutConfirm}>
+        <AlertDialogContent className="max-w-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-lg">
+              <LogOut className="w-5 h-5 text-red-500" />
+              Confirm Logout
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-base">
+              Are you sure you want to log out?
+              <br />
+              <span className="text-sm text-muted-foreground mt-2 block">
+                ✅ Your appointments and data will be preserved for when you log back in.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="flex gap-3 sm:gap-0">
+            <AlertDialogCancel 
+              onClick={closeLogoutConfirm}
+              disabled={isLoggingOut}
+              className="flex-1"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleLogout}
+              disabled={isLoggingOut}
+              className="flex-1 bg-red-600 hover:bg-red-700 text-white focus:ring-red-600"
+            >
+              {isLoggingOut ? (
+                <>
+                  <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  Logging out...
+                </>
+              ) : (
+                'Yes, Logout'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 };

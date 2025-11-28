@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Church, RefreshCw, Eye, EyeOff, ArrowLeft, MailCheck, LockKeyhole, Shield, AlertTriangle, Clock } from 'lucide-react';
+import { Church, RefreshCw, Eye, EyeOff, ArrowLeft, MailCheck, LockKeyhole, Shield, AlertTriangle, Clock, Ban } from 'lucide-react';
 import {
     signInWithEmailAndPassword,
     getMultiFactorResolver,
@@ -42,6 +42,290 @@ interface LoginAttempt {
   success: boolean;
 }
 
+// Rate Limit Functions
+interface RateLimitStatus {
+  attempts: number;
+  attemptsRemaining: number;
+  isBlocked: boolean;
+  blockUntil: number | null;
+  blockCount: number;
+  lastAttempt: number | null;
+}
+
+const BLOCK_DURATION = 15 * 60 * 1000; // 15 minutes
+const MAX_ATTEMPTS = 5;
+const PERMANENT_BLOCK_AFTER = 10; // Permanent block after 10 lockouts
+
+// ✅ ENHANCED: Server-side validation with permanent block support
+const checkRateLimit = async (email: string): Promise<RateLimitStatus> => {
+  try {
+    const normalizedEmail = email.toLowerCase().trim();
+    const rateLimitRef = doc(db, 'rateLimits', normalizedEmail);
+    const now = Date.now();
+
+    const docSnap = await getDoc(rateLimitRef);
+    
+    if (!docSnap.exists()) {
+      return {
+        attempts: 0,
+        attemptsRemaining: MAX_ATTEMPTS,
+        isBlocked: false,
+        blockUntil: null,
+        blockCount: 0,
+        lastAttempt: null
+      };
+    }
+
+    const data = docSnap.data();
+    const blockUntil = data.blockUntil || null;
+    const blockCount = data.blockCount || 0;
+    const permanentBlock = data.permanentBlock || false;
+    
+    // CRITICAL: Check if permanently blocked
+    if (permanentBlock) {
+      return {
+        attempts: data.attempts || 0,
+        attemptsRemaining: 0,
+        isBlocked: true,
+        blockUntil: null, // Null means permanent block
+        blockCount,
+        lastAttempt: data.lastAttempt || null
+      };
+    }
+    
+    // Check if temporarily blocked
+    if (blockUntil && now < blockUntil) {
+      return {
+        attempts: data.attempts || 0,
+        attemptsRemaining: 0,
+        isBlocked: true,
+        blockUntil,
+        blockCount,
+        lastAttempt: data.lastAttempt || null
+      };
+    }
+
+    // Reset if block expired
+    if (blockUntil && now >= blockUntil) {
+      await setDoc(rateLimitRef, {
+        attempts: 0,
+        lastAttempt: serverTimestamp(),
+        isBlocked: false,
+        blockUntil: null,
+        blockCount: blockCount, // Keep block count for tracking
+        permanentBlock: false,
+        email: normalizedEmail,
+        updatedAt: serverTimestamp()
+      }, { merge: true });
+      
+      return {
+        attempts: 0,
+        attemptsRemaining: MAX_ATTEMPTS,
+        isBlocked: false,
+        blockUntil: null,
+        blockCount,
+        lastAttempt: null
+      };
+    }
+
+    return {
+      attempts: data.attempts || 0,
+      attemptsRemaining: Math.max(0, MAX_ATTEMPTS - (data.attempts || 0)),
+      isBlocked: false,
+      blockUntil: null,
+      blockCount,
+      lastAttempt: data.lastAttempt || null
+    };
+  } catch (error) {
+    console.error('Error checking rate limit:', error);
+    throw new Error('Unable to verify account status. Please try again.');
+  }
+};
+
+// ✅ ENHANCED: Track failed attempts with permanent block
+const trackFailedLogin = async (email: string): Promise<RateLimitStatus> => {
+  try {
+    const normalizedEmail = email.toLowerCase().trim();
+    const rateLimitRef = doc(db, 'rateLimits', normalizedEmail);
+    const now = Date.now();
+
+    const docSnap = await getDoc(rateLimitRef);
+    
+    if (!docSnap.exists()) {
+      // First failed attempt
+      await setDoc(rateLimitRef, {
+        attempts: 1,
+        lastAttempt: serverTimestamp(),
+        isBlocked: false,
+        blockUntil: null,
+        blockCount: 0,
+        permanentBlock: false,
+        email: normalizedEmail,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+
+      return {
+        attempts: 1,
+        attemptsRemaining: MAX_ATTEMPTS - 1,
+        isBlocked: false,
+        blockUntil: null,
+        blockCount: 0,
+        lastAttempt: now
+      };
+    }
+
+    const data = docSnap.data();
+    const blockCount = data.blockCount || 0;
+    const blockUntil = data.blockUntil || null;
+    const permanentBlock = data.permanentBlock || false;
+    
+    // Check permanent block first
+    if (permanentBlock) {
+      return {
+        attempts: data.attempts || 0,
+        attemptsRemaining: 0,
+        isBlocked: true,
+        blockUntil: null, // Null means permanent
+        blockCount,
+        lastAttempt: data.lastAttempt || null
+      };
+    }
+    
+    // Still temporarily blocked - reject attempt
+    if (blockUntil && now < blockUntil) {
+      return {
+        attempts: data.attempts || 0,
+        attemptsRemaining: 0,
+        isBlocked: true,
+        blockUntil,
+        blockCount,
+        lastAttempt: data.lastAttempt || null
+      };
+    }
+    
+    // Block expired - reset attempts but keep block count
+    if (blockUntil && now >= blockUntil) {
+      await setDoc(rateLimitRef, {
+        attempts: 1,
+        lastAttempt: serverTimestamp(),
+        isBlocked: false,
+        blockUntil: null,
+        blockCount: blockCount, // Keep historical count
+        permanentBlock: false,
+        email: normalizedEmail,
+        updatedAt: serverTimestamp()
+      });
+      
+      return {
+        attempts: 1,
+        attemptsRemaining: MAX_ATTEMPTS - 1,
+        isBlocked: false,
+        blockUntil: null,
+        blockCount,
+        lastAttempt: now
+      };
+    }
+    
+    // Increment attempts
+    const newAttempts = (data.attempts || 0) + 1;
+    const isNowBlocked = newAttempts >= MAX_ATTEMPTS;
+    
+    // Check if we should apply permanent block
+    const newBlockCount = isNowBlocked ? blockCount + 1 : blockCount;
+    const shouldPermanentBlock = newBlockCount >= PERMANENT_BLOCK_AFTER;
+    const newBlockUntil = isNowBlocked && !shouldPermanentBlock ? now + BLOCK_DURATION : null;
+    
+    const updateData: any = {
+      attempts: newAttempts,
+      lastAttempt: serverTimestamp(),
+      isBlocked: isNowBlocked,
+      blockUntil: newBlockUntil,
+      blockCount: newBlockCount,
+      updatedAt: serverTimestamp()
+    };
+    
+    if (shouldPermanentBlock) {
+      updateData.permanentBlock = true;
+      updateData.blockUntil = null; // Clear temporary block for permanent
+      updateData.permanentBlockAt = serverTimestamp();
+    }
+
+    await updateDoc(rateLimitRef, updateData);
+
+    return {
+      attempts: newAttempts,
+      attemptsRemaining: Math.max(0, MAX_ATTEMPTS - newAttempts),
+      isBlocked: shouldPermanentBlock ? true : isNowBlocked,
+      blockUntil: shouldPermanentBlock ? null : newBlockUntil,
+      blockCount: newBlockCount,
+      lastAttempt: now
+    };
+  } catch (error) {
+    console.error('Error tracking failed login:', error);
+    throw new Error('Unable to process login attempt. Please try again.');
+  }
+};
+
+// ✅ ENHANCED: Reset failed attempts (only if not permanently blocked)
+const resetFailedAttempts = async (email: string): Promise<void> => {
+  try {
+    const normalizedEmail = email.toLowerCase().trim();
+    const rateLimitRef = doc(db, 'rateLimits', normalizedEmail);
+    
+    // Check if account is permanently blocked first
+    const docSnap = await getDoc(rateLimitRef);
+    if (docSnap.exists()) {
+      const data = docSnap.data();
+      if (data.permanentBlock) {
+        console.warn('Cannot reset attempts: Account is permanently blocked');
+        return;
+      }
+    }
+    
+    await setDoc(rateLimitRef, {
+      attempts: 0,
+      lastAttempt: serverTimestamp(),
+      isBlocked: false,
+      blockUntil: null,
+      // Keep blockCount for tracking purposes
+      email: normalizedEmail,
+      lastSuccessfulLogin: serverTimestamp(),
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+  } catch (error) {
+    console.error('Error resetting failed attempts:', error);
+    // Don't throw - this shouldn't block successful login
+  }
+};
+
+// ✅ ENHANCED: Get status with permanent block support
+const getRateLimitStatus = async (email: string): Promise<{
+  isBlocked: boolean;
+  isPermanent: boolean;
+  remainingTime: number;
+  attempts: number;
+  attemptsRemaining: number;
+  blockCount: number;
+}> => {
+  const status = await checkRateLimit(email);
+  const now = Date.now();
+  
+  const isPermanent = status.blockUntil === null && status.isBlocked;
+  const remainingTime = !isPermanent && status.blockUntil && status.blockUntil > now 
+    ? Math.ceil((status.blockUntil - now) / 60000) 
+    : 0;
+
+  return {
+    isBlocked: status.isBlocked,
+    isPermanent,
+    remainingTime,
+    attempts: status.attempts,
+    attemptsRemaining: status.attemptsRemaining,
+    blockCount: status.blockCount
+  };
+};
+
 const LoginPage = () => {
     const router = useRouter();
     const [error, setError] = useState('');
@@ -64,6 +348,7 @@ const LoginPage = () => {
     const [isBotDetectionActive, setIsBotDetectionActive] = useState(false);
     const [remainingAttempts, setRemainingAttempts] = useState(RATE_LIMIT_CONFIG.MAX_ATTEMPTS_PER_EMAIL);
     const [countdown, setCountdown] = useState<string>('');
+    const [isPermanentBlock, setIsPermanentBlock] = useState(false);
     const countdownRef = useRef<NodeJS.Timeout | null>(null);
 
     const [formData, setFormData] = useState({
@@ -196,6 +481,7 @@ const LoginPage = () => {
         setLastAttemptTime(null);
         setRemainingAttempts(RATE_LIMIT_CONFIG.MAX_ATTEMPTS_PER_EMAIL);
         setCountdown('');
+        setIsPermanentBlock(false);
         localStorage.removeItem('loginSecurityState');
         
         if (countdownRef.current) {
@@ -248,10 +534,42 @@ const LoginPage = () => {
         }));
     };
 
-    // Enhanced rate limiting check
-    const checkRateLimit = async (): Promise<boolean> => {
+    // Enhanced rate limiting check - SERVER SIDE FOCUS
+    const checkRateLimitServer = async (): Promise<boolean> => {
         const now = Date.now();
         
+        // ✅ SERVER-SIDE CHECK FIRST (this persists even if cookies are cleared)
+        try {
+            const serverStatus = await getRateLimitStatus(formData.email);
+            
+            if (serverStatus.isBlocked) {
+                if (serverStatus.isPermanent) {
+                    setIsPermanentBlock(true);
+                    setError('This account has been permanently locked due to excessive failed attempts. Please contact support.');
+                    return false;
+                }
+                
+                if (serverStatus.remainingTime > 0) {
+                    const lockTime = Date.now() + (serverStatus.remainingTime * 60000);
+                    setLockUntil(lockTime);
+                    setFailedAttempts(serverStatus.attempts);
+                    setRemainingAttempts(0);
+                    setError(`Account temporarily locked. Please try again in ${serverStatus.remainingTime} minutes.`);
+                    return false;
+                }
+            }
+            
+            // Update local state from server
+            setFailedAttempts(serverStatus.attempts);
+            setRemainingAttempts(serverStatus.attemptsRemaining);
+            setIsPermanentBlock(serverStatus.isPermanent);
+            
+        } catch (error: any) {
+            console.error('Server rate limit check failed:', error);
+            // Fall back to local checks but log the error
+        }
+        
+        // Local checks (secondary)
         if (lockUntil && now < lockUntil) {
             return false;
         }
@@ -263,20 +581,6 @@ const LoginPage = () => {
 
         if (!isBotDetectionActive) {
             setError('Please interact with the page before logging in.');
-            return false;
-        }
-
-        const recentAttempts = getRecentAttemptsForEmail(formData.email);
-        if (recentAttempts >= RATE_LIMIT_CONFIG.MAX_ATTEMPTS_PER_EMAIL) {
-            const lockTime = Date.now() + RATE_LIMIT_CONFIG.LOCKOUT_DURATION;
-            setLockUntil(lockTime);
-            return false;
-        }
-
-        try {
-            await checkServerRateLimit(formData.email, clientIP);
-        } catch (error: any) {
-            setError(error.message);
             return false;
         }
 
@@ -467,93 +771,124 @@ const LoginPage = () => {
         }
     };
 
-    // ✅ IMPROVED: Main login handler
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setError('');
-        setSuccess('');
+    // ✅ IMPROVED: Main login handler with SERVER-SIDE rate limiting
+// ✅ IMPROVED: Main login handler with proper Firebase rate limit handling
+const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setSuccess('');
+    
+    if (!await checkRateLimitServer()) {
+        return;
+    }
+    
+    setLastAttemptTime(Date.now());
+    setLoading(true);
+
+    try {
+        console.log('🔄 Attempting Firebase authentication...');
+        const userCredential = await signInWithEmailAndPassword(
+            auth,
+            formData.email,
+            formData.password
+        );
         
-        if (!await checkRateLimit()) {
+        // ✅ SERVER-SIDE: Reset security state on successful login
+        await resetFailedAttempts(formData.email);
+        resetSecurityState();
+        
+        // Track successful attempt
+        await trackLoginAttempt(formData.email, true);
+        trackLocalLoginAttempt(formData.email, true);
+        
+        const user = userCredential.user;
+        console.log('✅ Firebase login successful:', { 
+            uid: user.uid, 
+            email: user.email,
+            emailVerified: user.emailVerified 
+        });
+        
+        // Handle email verification if needed
+        if (!user.emailVerified) {
+            console.log('📧 Auto-verifying email for user:', user.email);
+            try {
+                await updateDoc(doc(db, 'users', user.uid), {
+                    emailVerified: true,
+                    pendingVerification: false,
+                    lastLogin: serverTimestamp()
+                });
+            } catch (updateError) {
+                console.log('Note: User document might not exist yet, continuing login...');
+            }
+        }
+        
+        // Redirect user
+        await redirectUser(user.uid, user.email || formData.email);
+        
+    } catch (err: any) {
+        console.error('❌ Login error:', err.code, err.message);
+        
+        // ✅ CRITICAL FIX: Handle Firebase's own rate limiting separately
+        if (err.code === 'auth/too-many-requests') {
+            setError('Too many login attempts. This account has been temporarily disabled . Please try again later or reset your password.');
+            setLoading(false);
+            // Don't track this as a failed attempt - Firebase already blocked it
             return;
         }
         
-        setLastAttemptTime(Date.now());
-        setLoading(true);
-
+        // ✅ Handle MFA requirement
+        if (err.code === 'auth/multi-factor-auth-required') {
+            const resolver = getMultiFactorResolver(auth, err);
+            setMfaResolver(resolver);
+            setShowMfaInput(true);
+            setLoading(false);
+            return;
+        }
+        
+        // ✅ For actual login failures (wrong password, user not found, etc.)
+        // Track the failed attempt in your custom rate limiting system
         try {
-            console.log('🔄 Attempting Firebase authentication...');
-            const userCredential = await signInWithEmailAndPassword(
-                auth,
-                formData.email,
-                formData.password
-            );
-            
-            // Reset security state on successful login
-            resetSecurityState();
-            
-            // Track successful attempt
-            await trackLoginAttempt(formData.email, true);
-            trackLocalLoginAttempt(formData.email, true);
-            
-            const user = userCredential.user;
-            console.log('✅ Firebase login successful:', { 
-                uid: user.uid, 
-                email: user.email,
-                emailVerified: user.emailVerified 
-            });
-            
-            // Handle email verification if needed
-            if (!user.emailVerified) {
-                console.log('📧 Auto-verifying email for user:', user.email);
-                try {
-                    await updateDoc(doc(db, 'users', user.uid), {
-                        emailVerified: true,
-                        pendingVerification: false,
-                        lastLogin: serverTimestamp()
-                    });
-                } catch (updateError) {
-                    console.log('Note: User document might not exist yet, continuing login...');
-                }
-            }
-            
-            // Redirect user
-            await redirectUser(user.uid, user.email || formData.email);
-            
-        } catch (err: any) {
-            console.error('❌ Login error:', err.code, err.message);
-            
-            // Track failed attempt
+            const serverStatus = await trackFailedLogin(formData.email);
             await trackLoginAttempt(formData.email, false, err.code);
             trackLocalLoginAttempt(formData.email, false);
             
-            const newFailedAttempts = failedAttempts + 1;
-            setFailedAttempts(newFailedAttempts);
-            const attemptsRemaining = RATE_LIMIT_CONFIG.MAX_ATTEMPTS_PER_EMAIL - newFailedAttempts;
-            setRemainingAttempts(attemptsRemaining);
+            // Update state from server response
+            setFailedAttempts(serverStatus.attempts);
+            setRemainingAttempts(serverStatus.attemptsRemaining);
+            setIsPermanentBlock(serverStatus.blockUntil === null && serverStatus.isBlocked);
             
-            if (newFailedAttempts >= RATE_LIMIT_CONFIG.MAX_ATTEMPTS_PER_EMAIL) {
-                const lockTime = Date.now() + RATE_LIMIT_CONFIG.LOCKOUT_DURATION;
-                setLockUntil(lockTime);
-            } else if (err.code === 'auth/multi-factor-auth-required') {
-                const resolver = getMultiFactorResolver(auth, err);
-                setMfaResolver(resolver);
-                setShowMfaInput(true);
+            if (serverStatus.isBlocked) {
+                if (serverStatus.blockUntil === null) {
+                    // Permanent block
+                    setError('This account has been permanently locked due to excessive failed attempts. Please contact support.');
+                } else if (serverStatus.blockUntil > Date.now()) {
+                    // Temporary block
+                    const lockTime = serverStatus.blockUntil;
+                    setLockUntil(lockTime);
+                    const remainingMinutes = Math.ceil((lockTime - Date.now()) / 60000);
+                    setError(`Account locked. Too many failed attempts. Please try again in ${remainingMinutes} minutes.`);
+                }
             } else {
+                // Show appropriate error message based on Firebase error
                 const messages: { [key: string]: string } = {
                     'auth/invalid-email': 'Please enter a valid email address.',
                     'auth/user-not-found': 'No account found with this email.',
-                    'auth/wrong-password': `Invalid password. ${attemptsRemaining} attempts remaining.`,
-                    'auth/too-many-requests': 'Too many attempts. Try again later.',
-                    'auth/invalid-credential': `Invalid email or password. ${attemptsRemaining} attempts remaining.`,
-                    'auth/user-disabled': 'This account has been disabled.',
+                    'auth/wrong-password': `Invalid password. ${serverStatus.attemptsRemaining} attempts remaining.`,
+                    'auth/invalid-credential': `Invalid email or password. ${serverStatus.attemptsRemaining} attempts remaining.`,
+                    'auth/user-disabled': 'This account has been disabled. Please contact support.',
                     'auth/network-request-failed': 'Network error. Please check your connection.',
                 };
-                setError(messages[err.code] || `Login failed. ${attemptsRemaining} attempts remaining.`);
+                setError(messages[err.code] || `Login failed. ${serverStatus.attemptsRemaining} attempts remaining.`);
             }
-            setLoading(false);
+        } catch (trackError) {
+            console.error('Error tracking failed login:', trackError);
+            // Fallback error message if tracking fails
+            setError('Login failed. Please try again.');
         }
-    };
-
+        
+        setLoading(false);
+    }
+};
     // Forgot Password Handler
     const handleForgotPassword = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -568,6 +903,14 @@ const LoginPage = () => {
         }
 
         try {
+            // Check if account is permanently blocked before allowing password reset
+            const serverStatus = await getRateLimitStatus(resetEmail);
+            if (serverStatus.isPermanent) {
+                setError('This account has been permanently locked. Please contact support for assistance.');
+                setResetLoading(false);
+                return;
+            }
+
             await sendPasswordResetEmail(auth, resetEmail);
             
             try {
@@ -624,6 +967,8 @@ const LoginPage = () => {
 
             const userCredential = await mfaResolver.resolveSignIn(multiFactorAssertion);
             
+            // ✅ SERVER-SIDE: Reset security state
+            await resetFailedAttempts(formData.email);
             resetSecurityState();
             
             const user = userCredential.user;
@@ -669,6 +1014,25 @@ const LoginPage = () => {
 
     // Security status display with real-time countdown
     const renderSecurityStatus = () => {
+        if (isPermanentBlock) {
+            return (
+                <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <div className="flex items-center gap-3">
+                        <Ban className="w-5 h-5 text-red-600 flex-shrink-0" />
+                        <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                                <span className="font-semibold text-red-800 text-sm">Account Permanently Locked</span>
+                            </div>
+                            <p className="text-red-700 text-sm">
+                                This account has been locked due to excessive failed attempts. 
+                                Please contact support for assistance.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         if (failedAttempts === 0 && !isLockedOut) return null;
         
         if (isLockedOut) {
@@ -968,7 +1332,7 @@ const LoginPage = () => {
                                 value={formData.email}
                                 onChange={(e) => handleChange('email', e.target.value)}
                                 required
-                                disabled={loading || isLockedOut || false}
+                                disabled={loading || isLockedOut || isPermanentBlock}
                                 autoComplete="email"
                             />
                         </div>
@@ -984,7 +1348,7 @@ const LoginPage = () => {
                                     value={formData.password}
                                     onChange={(e) => handleChange('password', e.target.value)}
                                     required
-                                    disabled={loading || isLockedOut || false}
+                                    disabled={loading || isLockedOut || isPermanentBlock}
                                     autoComplete="current-password"
                                     className="pr-10"
                                 />
@@ -992,7 +1356,7 @@ const LoginPage = () => {
                                     type="button"
                                     onClick={() => setShowPassword(!showPassword)}
                                     className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
-                                    disabled={loading || isLockedOut || false}
+                                    disabled={loading || isLockedOut || isPermanentBlock}
                                 >
                                     {showPassword ? (
                                         <EyeOff className="w-4 h-4" />
@@ -1011,7 +1375,7 @@ const LoginPage = () => {
                                     onCheckedChange={(checked) =>
                                         handleChange('rememberMe', checked as boolean)
                                     }
-                                    disabled={loading || isLockedOut || false}
+                                    disabled={loading || isLockedOut || isPermanentBlock}
                                 />
                                 <span>Remember me</span>
                             </label>
@@ -1019,7 +1383,7 @@ const LoginPage = () => {
                                 type="button"
                                 onClick={() => setShowForgotPassword(true)}
                                 className="text-primary hover:underline font-medium"
-                                disabled={loading || isLockedOut || false}
+                                disabled={loading || isLockedOut || isPermanentBlock}
                             >
                                 Forgot password?
                             </button>
@@ -1043,12 +1407,17 @@ const LoginPage = () => {
                         <Button
                             type="submit"
                             className="w-full"
-                            disabled={loading || isLockedOut || false}
+                            disabled={loading || isLockedOut || isPermanentBlock}
                         >
                             {loading ? (
                                 <>
                                     <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
                                     Signing in...
+                                </>
+                            ) : isPermanentBlock ? (
+                                <>
+                                    <Ban className="mr-2 h-4 w-4" />
+                                    Permanently Locked
                                 </>
                             ) : isLockedOut ? (
                                 <>
@@ -1083,4 +1452,4 @@ const LoginPage = () => {
     );  
 };
 
-export default LoginPage; 
+export default LoginPage;
