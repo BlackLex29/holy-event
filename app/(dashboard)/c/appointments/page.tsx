@@ -47,7 +47,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/components/ui/use-toast';
 import { cn } from '@/lib/utils';
-import { db } from '@/lib/firebase-config';
+import { db, auth } from '@/lib/firebase-config';
 import { 
   collection, 
   addDoc, 
@@ -55,6 +55,7 @@ import {
   Timestamp,
   FieldValue 
 } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 // ==================== ZOD SCHEMA ====================
 const formSchema = z.object({
@@ -289,15 +290,27 @@ const parseEventDate = (dateString: string): Date | null => {
   }
 };
 
-// ==================== USER ID MANAGEMENT ====================
-const getUserId = (): string => {
+// ==================== IMPROVED USER ID MANAGEMENT ====================
+const getCurrentAppointmentUserId = (): string => {
   if (typeof window === 'undefined') return 'user_temp';
   
+  // Try to get from auth first
+  try {
+    const authUser = auth.currentUser;
+    if (authUser && authUser.uid) {
+      return authUser.uid;
+    }
+  } catch (error) {
+    console.log('Auth not available, using localStorage fallback');
+  }
+  
+  // Fallback to localStorage userId
   let userId = localStorage.getItem('church_appointment_userId');
   if (!userId) {
     userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
     localStorage.setItem('church_appointment_userId', userId);
   }
+  
   return userId;
 };
 
@@ -393,6 +406,40 @@ const checkDuplicateAppointment = (
   });
 };
 
+// ==================== APPOINTMENTS STORAGE MANAGEMENT ====================
+const getAppointmentsStorageKey = (): string => {
+  const userId = getCurrentAppointmentUserId();
+  return `church_appointments_${userId}`;
+};
+
+const loadAppointmentsFromStorage = (): UserAppointment[] => {
+  try {
+    if (typeof window === 'undefined') return [];
+    
+    const storageKey = getAppointmentsStorageKey();
+    const stored = localStorage.getItem(storageKey);
+    
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (error) {
+    console.error('Error loading appointments from storage:', error);
+  }
+  
+  return [];
+};
+
+const saveAppointmentsToStorage = (appointments: UserAppointment[]): void => {
+  try {
+    if (typeof window === 'undefined') return;
+    
+    const storageKey = getAppointmentsStorageKey();
+    localStorage.setItem(storageKey, JSON.stringify(appointments));
+  } catch (error) {
+    console.error('Error saving appointments to storage:', error);
+  }
+};
+
 // ==================== MAIN COMPONENT ====================
 export default function EventAppointmentPage() {
   const { toast } = useToast();
@@ -406,6 +453,7 @@ export default function EventAppointmentPage() {
   const [currentUserInfo, setCurrentUserInfo] = useState<{email?: string; fullName?: string; phone?: string} | null>(null);
   const [autoFilledEmail, setAutoFilledEmail] = useState<string | null>(null);
   const [firebaseAvailable, setFirebaseAvailable] = useState<boolean | null>(null);
+  const [isAuthChecked, setIsAuthChecked] = useState(false);
 
   const {
     register,
@@ -450,6 +498,38 @@ export default function EventAppointmentPage() {
     loadUserInfo();
     loadUserAppointments();
   }, []);
+
+  // Listen to auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      console.log('🔐 Auth state changed:', user ? 'User logged in' : 'User logged out');
+      setIsAuthChecked(true);
+      
+      if (user) {
+        // User logged in - update user info
+        const userInfo = {
+          email: user.email || '',
+          fullName: user.displayName || '',
+        };
+        
+        if (user.email) {
+          setUserEmail(user.email);
+          setValue('email', user.email, { shouldValidate: true });
+        }
+        
+        setCurrentUserInfo(userInfo);
+        setCurrentUserEmail(user.email);
+      } else {
+        // User logged out - pero keep using localStorage for appointments
+        console.log('👤 User logged out, but appointments preserved in localStorage');
+      }
+      
+      // Always reload appointments regardless of auth state
+      loadUserAppointments();
+    });
+
+    return () => unsubscribe();
+  }, [setValue]);
 
   // Auto-detect and fill user email on component mount
   useEffect(() => {
@@ -571,40 +651,29 @@ export default function EventAppointmentPage() {
   // Load user appointments from localStorage
   const loadUserAppointments = () => {
     try {
-      if (typeof window === 'undefined') return;
+      const appointments = loadAppointmentsFromStorage();
       
-      const stored = localStorage.getItem('appointments');
-      if (stored) {
-        const allAppointments = JSON.parse(stored);
-        const currentUserEmail = getUserEmail();
-        const userId = getUserId();
-        
-        // Filter: I-display lang ang appointments ng current user
-        const userAppointments = allAppointments.filter((appointment: UserAppointment) => 
-          appointment.userId === userId || appointment.email === currentUserEmail
-        );
-        
-        // Sort by date (newest first) with safe date comparison
-        const sortedAppointments = userAppointments.sort((a: UserAppointment, b: UserAppointment) => {
-          const dateA = parseEventDate(a.createdAt) || new Date(0);
-          const dateB = parseEventDate(b.createdAt) || new Date(0);
-          return dateB.getTime() - dateA.getTime();
-        });
-        
-        setUserAppointments(sortedAppointments);
-      }
+      // Sort by date (newest first) with safe date comparison
+      const sortedAppointments = appointments.sort((a: UserAppointment, b: UserAppointment) => {
+        const dateA = parseEventDate(a.createdAt) || new Date(0);
+        const dateB = parseEventDate(b.createdAt) || new Date(0);
+        return dateB.getTime() - dateA.getTime();
+      });
+      
+      setUserAppointments(sortedAppointments);
+      console.log('📋 Loaded appointments:', sortedAppointments.length);
     } catch (error) {
       console.error('Error loading appointments from localStorage:', error);
     }
   };
 
-  // ✅ IMPROVED SUBMIT FUNCTION WITH DUPLICATE CHECK
+  // ✅ IMPROVED SUBMIT FUNCTION WITH BETTER STORAGE MANAGEMENT
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
     console.log('🔄 Starting submission process...');
     
     try {
-      const userId = getUserId();
+      const userId = getCurrentAppointmentUserId();
       const userEmail = data.email.trim();
       
       // ✅ CHECK FOR DUPLICATE APPOINTMENT FIRST
@@ -703,11 +772,11 @@ export default function EventAppointmentPage() {
         appointment.message = data.message.trim().substring(0, 50);
       }
 
-      // ✅ SAVE TO LOCALSTORAGE (REPLACE ARRAY INSTEAD OF PUSH)
-      const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
+      // ✅ SAVE TO LOCALSTORAGE USING USER-SPECIFIC STORAGE KEY
+      const existingAppointments = loadAppointmentsFromStorage();
       
       // Remove any existing appointments with the same details to prevent duplicates
-      const filteredExisting = existing.filter((existingAppt: UserAppointment) => {
+      const filteredExisting = existingAppointments.filter((existingAppt: UserAppointment) => {
         const isSameAppointment = 
           existingAppt.eventDate === appointment.eventDate &&
           existingAppt.eventTime === appointment.eventTime &&
@@ -719,7 +788,7 @@ export default function EventAppointmentPage() {
       
       // Add the new appointment
       const updatedAppointments = [...filteredExisting, appointment];
-      localStorage.setItem('appointments', JSON.stringify(updatedAppointments));
+      saveAppointmentsToStorage(updatedAppointments);
 
       // Update local state
       setUserAppointments(prev => {
@@ -967,6 +1036,14 @@ export default function EventAppointmentPage() {
               <p className="text-green-700 text-sm">
                 ✅ Welcome back! Your email has been auto-filled.
                 {autoFilledEmail && ` Detected: ${autoFilledEmail}`}
+              </p>
+            </div>
+          )}
+
+          {!isAuthChecked && (
+            <div className="mt-4 bg-blue-50 border border-blue-200 rounded-lg p-3 inline-block">
+              <p className="text-blue-700 text-sm">
+                🔄 Checking authentication status...
               </p>
             </div>
           )}
