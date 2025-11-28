@@ -12,20 +12,25 @@ import {
   MapPin,
   CheckCircle,
   XCircle,
-  CalendarDays
+  CalendarDays,
+  User,
+  Users,
+  Phone,
+  Mail
 } from 'lucide-react';
 import Link from 'next/link';
 import { useToast } from '@/components/ui/use-toast';
-import { db } from '@/lib/firebase-config';
-import { collection, query, where, orderBy, onSnapshot, getDocs } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase-config';
+import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
+import { onAuthStateChanged } from 'firebase/auth';
 
 interface Appointment {
   id: string;
   eventType: string;
   eventDate: string;
   eventTime: string;
-  status: 'pending' | 'approved' | 'rejected';
+  status: 'pending' | 'approved' | 'rejected' | 'confirmed' | 'cancelled';
   submittedAt: string;
   email: string;
   fullName?: string;
@@ -33,6 +38,7 @@ interface Appointment {
   guestCount?: string;
   message?: string;
   userId?: string;
+  userEmail?: string;
   createdAt?: any;
 }
 
@@ -56,18 +62,8 @@ interface UserData {
   name: string;
   email: string;
   phone: string;
+  userId: string;
 }
-
-// Helper functions for user identification
-const getUserId = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('church_appointment_userId');
-};
-
-const getUserEmail = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('church_appointment_userEmail');
-};
 
 // Helper function to format event type
 const formatEventType = (eventType: string): string => {
@@ -77,13 +73,6 @@ const formatEventType = (eventType: string): string => {
     baptism: 'Baptism',
     funeral: 'Funeral Mass',
     confirmation: 'Confirmation',
-    confession: 'Confession',
-    rosary: 'Holy Rosary',
-    adoration: 'Adoration',
-    recollection: 'Recollection',
-    fiesta: 'Barangay Fiesta',
-    'simbang-gabi': 'Simbang Gabi',
-    'school-mass': 'School Mass'
   };
   return eventTypeMap[eventType] || eventType;
 };
@@ -102,366 +91,398 @@ const convertTimestampToISO = (timestamp: any): string => {
   return new Date().toISOString();
 };
 
+// Helper to get user's permanent account identifier
+const getPermanentUserIdentifier = (): string | null => {
+  if (typeof window === 'undefined') return null;
+  let deviceId = localStorage.getItem('holy_event_device_id');
+  if (!deviceId) {
+    deviceId = 'device_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    localStorage.setItem('holy_event_device_id', deviceId);
+  }
+  return `user_${deviceId}@holyevent.com`;
+};
+
 export default function ClientDashboardPage() {
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [upcomingEvents, setUpcomingEvents] = useState<ChurchEvent[]>([]);
   const [userData, setUserData] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [viewAllAppointments, setViewAllAppointments] = useState(false);
+  const [viewAllEvents, setViewAllEvents] = useState(false);
   const { toast } = useToast();
   const router = useRouter();
 
-  // Load data from localStorage on component mount
-  useEffect(() => {
-    const loadPersistedData = () => {
-      try {
-        // Load appointments from localStorage
-        const storedAppointments = localStorage.getItem('appointments');
-        if (storedAppointments) {
-          const allAppointments: Appointment[] = JSON.parse(storedAppointments);
-          const userId = getUserId();
-          const userEmail = getUserEmail();
-          
-          // Filter appointments for current user
-          const userAppointments = allAppointments.filter((apt: Appointment) => 
-            apt.userId === userId || apt.email === userEmail
-          );
-          
-          console.log('📱 Loaded appointments from localStorage:', userAppointments.length);
-          setAppointments(userAppointments);
-        }
-
-        // Load events from localStorage
-        const storedEvents = localStorage.getItem('churchEvents');
-        if (storedEvents) {
-          const allEvents: ChurchEvent[] = JSON.parse(storedEvents);
-          const now = new Date();
-          const futureEvents = allEvents
-            .filter(event => {
-              try {
-                const eventDate = new Date(event.date);
-                return eventDate >= new Date(now.setHours(0, 0, 0, 0)) && event.status === 'active';
-              } catch {
-                return false;
-              }
-            })
-            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-          
-          setUpcomingEvents(futureEvents);
-          console.log('📱 Loaded events from localStorage:', futureEvents.length);
-        }
-      } catch (error) {
-        console.error('Error loading persisted data:', error);
-      }
-    };
-
-    loadPersistedData();
-  }, []);
-
-  // Create stable callback functions
+  // Check authentication using the same system as booking page
   const checkAuthentication = useCallback(() => {
-    const userId = getUserId();
-    const userEmail = getUserEmail();
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      setIsAuthenticated(true);
+      return true;
+    }
     
-    if (!userId || !userEmail) {
+    // Check if we have permanent account credentials
+    const permanentEmail = getPermanentUserIdentifier();
+    const permanentPassword = localStorage.getItem('holy_event_permanent_password');
+    
+    if (permanentEmail && permanentPassword) {
+      // User has permanent account but not logged in yet
       setIsAuthenticated(false);
-      router.push('/login?redirect=' + encodeURIComponent('/c/dashboard'));
       return false;
     }
     
-    setIsAuthenticated(true);
-    return true;
+    setIsAuthenticated(false);
+    router.push('/login?redirect=' + encodeURIComponent('/c/dashboard'));
+    return false;
   }, [router]);
+
+  // Load appointments from Firebase using the same logic as booking page
+  const loadAppointmentsFromFirebase = async (userEmail: string, userId: string): Promise<Appointment[]> => {
+    try {
+      if (!db) {
+        console.error('Firebase not available');
+        return [];
+      }
+
+      console.log('🔄 Loading appointments from Firebase for:', { userEmail, userId });
+      
+      const appointmentsRef = collection(db, 'appointments');
+      const appointments: Appointment[] = [];
+      
+      // Strategy 1: Query by userId (most reliable)
+      try {
+        const q1 = query(appointmentsRef, where('userId', '==', userId));
+        const querySnapshot1 = await getDocs(q1);
+        
+        querySnapshot1.forEach((doc) => {
+          const data = doc.data();
+          appointments.push({
+            id: doc.id,
+            eventType: data.eventType || '',
+            eventDate: data.eventDate || '',
+            eventTime: data.eventTime || '',
+            status: data.status || 'pending',
+            submittedAt: convertTimestampToISO(data.createdAt),
+            email: data.email || '',
+            fullName: data.fullName || '',
+            phone: data.phone || '',
+            guestCount: data.guestCount || '',
+            message: data.message || '',
+            userId: data.userId || '',
+            userEmail: data.userEmail || '',
+            createdAt: data.createdAt
+          });
+        });
+        
+        console.log(`✅ Found ${querySnapshot1.size} appointments by userId`);
+      } catch (error) {
+        console.log('❌ Query by userId failed:', error);
+      }
+      
+      // Strategy 2: Query by userEmail (backup)
+      try {
+        const q2 = query(appointmentsRef, where('userEmail', '==', userEmail));
+        const querySnapshot2 = await getDocs(q2);
+        
+        querySnapshot2.forEach((doc) => {
+          const data = doc.data();
+          const appointment = {
+            id: doc.id,
+            eventType: data.eventType || '',
+            eventDate: data.eventDate || '',
+            eventTime: data.eventTime || '',
+            status: data.status || 'pending',
+            submittedAt: convertTimestampToISO(data.createdAt),
+            email: data.email || '',
+            fullName: data.fullName || '',
+            phone: data.phone || '',
+            guestCount: data.guestCount || '',
+            message: data.message || '',
+            userId: data.userId || '',
+            userEmail: data.userEmail || '',
+            createdAt: data.createdAt
+          };
+          
+          // Check if appointment already exists to avoid duplicates
+          if (!appointments.find(a => a.id === doc.id)) {
+            appointments.push(appointment);
+          }
+        });
+        
+        console.log(`✅ Found ${querySnapshot2.size} appointments by userEmail`);
+      } catch (error) {
+        console.log('❌ Query by userEmail failed:', error);
+      }
+      
+      // Strategy 3: Query by email (legacy field)
+      try {
+        const q3 = query(appointmentsRef, where('email', '==', userEmail));
+        const querySnapshot3 = await getDocs(q3);
+        
+        querySnapshot3.forEach((doc) => {
+          const data = doc.data();
+          const appointment = {
+            id: doc.id,
+            eventType: data.eventType || '',
+            eventDate: data.eventDate || '',
+            eventTime: data.eventTime || '',
+            status: data.status || 'pending',
+            submittedAt: convertTimestampToISO(data.createdAt),
+            email: data.email || '',
+            fullName: data.fullName || '',
+            phone: data.phone || '',
+            guestCount: data.guestCount || '',
+            message: data.message || '',
+            userId: data.userId || '',
+            userEmail: data.userEmail || '',
+            createdAt: data.createdAt
+          };
+          
+          // Check if appointment already exists to avoid duplicates
+          if (!appointments.find(a => a.id === doc.id)) {
+            appointments.push(appointment);
+          }
+        });
+        
+        console.log(`✅ Found ${querySnapshot3.size} appointments by email`);
+      } catch (error) {
+        console.log('❌ Query by email failed:', error);
+      }
+      
+      // Remove duplicates and sort by creation date (newest first)
+      const uniqueAppointments = Array.from(new Map(appointments.map(item => [item.id, item])).values());
+      
+      uniqueAppointments.sort((a, b) => {
+        const dateA = new Date(a.submittedAt);
+        const dateB = new Date(b.submittedAt);
+        return dateB.getTime() - dateA.getTime();
+      });
+      
+      console.log(`✅ Total unique appointments loaded: ${uniqueAppointments.length}`);
+      
+      return uniqueAppointments;
+      
+    } catch (error: any) {
+      console.error('❌ Error loading appointments from Firebase:', error);
+      return [];
+    }
+  };
 
   // Main dashboard initialization
   useEffect(() => {
-    if (!checkAuthentication()) {
-      return;
-    }
+    let appointmentsUnsubscribe: (() => void) | null = null;
+    let eventsUnsubscribe: (() => void) | null = null;
 
     const initializeDashboard = async () => {
       try {
         setLoading(true);
         
-        const userId = getUserId();
-        const userEmail = getUserEmail();
-        
-        if (!userId || !userEmail) {
-          toast({
-            title: 'Authentication Required',
-            description: 'Please log in again.',
-            variant: 'destructive',
+        // Wait for auth state to be determined
+        const authCheck = await new Promise<boolean>((resolve) => {
+          const unsubscribe = onAuthStateChanged(auth, (user) => {
+            unsubscribe();
+            if (user) {
+              console.log('✅ User authenticated:', user.email);
+              
+              // Get user data from permanent account system
+              const currentUser: UserData = {
+                name: user.displayName || user.email?.split('@')[0] || 'Parishioner',
+                email: user.email || '',
+                phone: '+639171234567', // Default phone
+                userId: user.uid
+              };
+
+              setUserData(currentUser);
+              setIsAuthenticated(true);
+
+              // Load appointments
+              loadAppointmentsFromFirebase(user.email || '', user.uid).then(appts => {
+                setAppointments(appts);
+                console.log('✅ Appointments loaded:', appts.length);
+              });
+
+              resolve(true);
+            } else {
+              console.log('❌ No user authenticated');
+              setIsAuthenticated(false);
+              
+              // Check if we have permanent account data
+              const permanentEmail = getPermanentUserIdentifier();
+              if (permanentEmail) {
+                const tempUser: UserData = {
+                  name: 'Church Event User',
+                  email: permanentEmail,
+                  phone: '09123456789',
+                  userId: 'temp_' + permanentEmail
+                };
+                setUserData(tempUser);
+                
+                // Try to load appointments with permanent email
+                loadAppointmentsFromFirebase(permanentEmail, 'temp_' + permanentEmail).then(appts => {
+                  setAppointments(appts);
+                  console.log('✅ Appointments loaded with permanent email:', appts.length);
+                });
+              }
+              
+              resolve(false);
+            }
           });
-          router.push('/login');
-          return;
+        });
+
+        if (!authCheck) {
+          toast({
+            title: 'Using Guest Access',
+            description: 'Some features may be limited. Book appointments to get full access.',
+            variant: 'default',
+          });
         }
 
-        // Get user data
-        const currentUser: UserData = {
-          name: userEmail.split('@')[0] || 'Parishioner',
-          email: userEmail,
-          phone: '+639171234567'
+        console.log('🔄 Setting up real-time listeners...');
+
+        // REAL-TIME LISTENER FOR APPOINTMENTS
+        const setupAppointmentsListener = () => {
+          try {
+            const currentUser = auth.currentUser;
+            if (currentUser) {
+              const appointmentsQuery = query(
+                collection(db, 'appointments'),
+                where('userId', '==', currentUser.uid)
+              );
+
+              appointmentsUnsubscribe = onSnapshot(
+                appointmentsQuery, 
+                (querySnapshot) => {
+                  const userAppointments: Appointment[] = [];
+                  querySnapshot.forEach((doc) => {
+                    const data = doc.data();
+                    userAppointments.push({
+                      id: doc.id,
+                      eventType: data.eventType || '',
+                      eventDate: data.eventDate || '',
+                      eventTime: data.eventTime || '',
+                      status: data.status || 'pending',
+                      submittedAt: convertTimestampToISO(data.createdAt),
+                      email: data.email || '',
+                      fullName: data.fullName || '',
+                      phone: data.phone || '',
+                      guestCount: data.guestCount || '',
+                      message: data.message || '',
+                      userId: data.userId || '',
+                      userEmail: data.userEmail || '',
+                      createdAt: data.createdAt
+                    });
+                  });
+
+                  // Sort by date client-side
+                  userAppointments.sort((a, b) => {
+                    const dateA = new Date(a.submittedAt);
+                    const dateB = new Date(b.submittedAt);
+                    return dateB.getTime() - dateA.getTime();
+                  });
+                  
+                  console.log('📊 Real-time appointments update:', userAppointments.length);
+                  setAppointments(userAppointments);
+                },
+                (error) => {
+                  console.error('❌ Firestore appointments error:', error);
+                }
+              );
+            }
+          } catch (error) {
+            console.error('❌ Cannot setup appointments listener:', error);
+          }
         };
 
-        setUserData(currentUser);
-
-        console.log('🔄 Setting up READ-ONLY real-time listeners...');
-
-        // FIXED: SIMPLIFIED APPOINTMENTS QUERY - No composite index needed
-        const loadAppointments = async () => {
+        // REAL-TIME LISTENER FOR CHURCH EVENTS
+        const setupEventsListener = () => {
           try {
-            console.log('📊 Loading appointments without composite index...');
-            
-            // Simple query without orderBy to avoid index requirement
-            const appointmentsQuery = query(
-              collection(db, 'appointments'),
-              where('userId', '==', userId)
+            const eventsQuery = query(
+              collection(db, 'events'),
+              where('status', '==', 'active')
             );
 
-            const querySnapshot = await getDocs(appointmentsQuery);
-            const userAppointments: Appointment[] = [];
-            
-            querySnapshot.forEach((doc) => {
-              const data = doc.data();
-              const appointment: Appointment = {
-                id: doc.id,
-                eventType: data.eventType || '',
-                eventDate: data.eventDate || '',
-                eventTime: data.eventTime || '',
-                status: data.status || 'pending',
-                submittedAt: convertTimestampToISO(data.createdAt),
-                email: data.email || '',
-                fullName: data.fullName || '',
-                phone: data.phone || '',
-                guestCount: data.guestCount || '',
-                message: data.message || '',
-                userId: data.userId || '',
-                createdAt: data.createdAt
-              };
-              userAppointments.push(appointment);
-            });
-
-            // Sort by date client-side
-            userAppointments.sort((a, b) => {
-              const dateA = new Date(a.submittedAt || a.eventDate);
-              const dateB = new Date(b.submittedAt || b.eventDate);
-              return dateB.getTime() - dateA.getTime(); // Descending order
-            });
-
-            console.log('✅ Loaded appointments:', userAppointments.length);
-            
-            // Update localStorage with latest appointments for persistence
-            localStorage.setItem('appointments', JSON.stringify(userAppointments));
-            
-            // Set ALL appointments for the user
-            setAppointments(userAppointments);
-            
-          } catch (error) {
-            console.error('❌ Error loading appointments:', error);
-            // Use localStorage data if Firestore fails
-          }
-        };
-
-        // Load appointments initially
-        await loadAppointments();
-
-        // REAL-TIME LISTENER FOR APPOINTMENTS (Simplified - without orderBy)
-        const appointmentsQuery = query(
-          collection(db, 'appointments'),
-          where('userId', '==', userId)
-        );
-
-        const appointmentsUnsubscribe = onSnapshot(
-          appointmentsQuery, 
-          (querySnapshot) => {
-            const userAppointments: Appointment[] = [];
-            querySnapshot.forEach((doc) => {
-              const data = doc.data();
-              const appointment: Appointment = {
-                id: doc.id,
-                eventType: data.eventType || '',
-                eventDate: data.eventDate || '',
-                eventTime: data.eventTime || '',
-                status: data.status || 'pending',
-                submittedAt: convertTimestampToISO(data.createdAt),
-                email: data.email || '',
-                fullName: data.fullName || '',
-                phone: data.phone || '',
-                guestCount: data.guestCount || '',
-                message: data.message || '',
-                userId: data.userId || '',
-                createdAt: data.createdAt
-              };
-              userAppointments.push(appointment);
-            });
-
-            // Sort client-side to avoid composite index
-            userAppointments.sort((a, b) => {
-              const dateA = new Date(a.submittedAt || a.eventDate);
-              const dateB = new Date(b.submittedAt || b.eventDate);
-              return dateB.getTime() - dateA.getTime(); // Descending order
-            });
-            
-            console.log('📊 Real-time appointments update:', userAppointments.length);
-            
-            // Update localStorage with latest appointments for persistence
-            localStorage.setItem('appointments', JSON.stringify(userAppointments));
-            
-            // Set ALL appointments for the user
-            setAppointments(userAppointments);
-          },
-          (error) => {
-            console.error('❌ Firestore appointments error:', error);
-            // Don't show error toast since we already have data from localStorage
-          }
-        );
-
-        // REAL-TIME LISTENER FOR CHURCH EVENTS (Public - READ ONLY)
-        const setupEventsListener = () => {
-          console.log('🎯 Setting up READ-ONLY real-time events listener...');
-          
-          try {
-            // Try multiple collections for events
-            const collectionsToTry = ['events', 'churchevents', 'church_events'];
-            
-            let activeUnsubscribe: (() => void) | null = null;
-            
-            const tryCollection = (collectionName: string): Promise<boolean> => {
-              return new Promise((resolve) => {
-                try {
-                  // SIMPLIFIED QUERY - No composite index needed
-                  const eventsQuery = query(
-                    collection(db, collectionName),
-                    where('status', '==', 'active')
-                  );
+            eventsUnsubscribe = onSnapshot(
+              eventsQuery, 
+              (querySnapshot) => {
+                const churchEvents: ChurchEvent[] = [];
+                const now = new Date();
+                
+                querySnapshot.forEach((doc) => {
+                  const data = doc.data();
+                  const eventDate = data.date;
                   
-                  const eventsUnsubscribe = onSnapshot(
-                    eventsQuery, 
-                    (querySnapshot) => {
-                      console.log(`📡 Real-time PUBLIC events from ${collectionName}:`, querySnapshot.size, 'events');
-                      
-                      const churchEvents: ChurchEvent[] = [];
-                      const now = new Date();
-                      
-                      querySnapshot.forEach((doc) => {
-                        const data = doc.data();
-                        const eventDate = data.date;
-                        
-                        try {
-                          const eventDateObj = new Date(eventDate);
-                          const isFutureEvent = eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
-                          
-                          if (isFutureEvent && data.status === 'active') {
-                            churchEvents.push({
-                              id: doc.id,
-                              type: data.type || '',
-                              title: data.title || '',
-                              description: data.description || '',
-                              date: eventDate,
-                              time: data.time || '',
-                              location: data.location || '',
-                              priest: data.priest || '',
-                              status: data.status || 'active',
-                              isPublic: data.isPublic !== false,
-                              postedAt: data.postedAt,
-                              createdAt: data.createdAt,
-                              updatedAt: data.updatedAt
-                            });
-                          }
-                        } catch (error) {
-                          console.error('Error processing event date:', error);
-                        }
+                  try {
+                    const eventDateObj = new Date(eventDate);
+                    const isFutureEvent = eventDateObj >= new Date(now.setHours(0, 0, 0, 0));
+                    
+                    if (isFutureEvent && data.status === 'active') {
+                      churchEvents.push({
+                        id: doc.id,
+                        type: data.type || '',
+                        title: data.title || '',
+                        description: data.description || '',
+                        date: eventDate,
+                        time: data.time || '',
+                        location: data.location || '',
+                        priest: data.priest || '',
+                        status: data.status || 'active',
+                        isPublic: data.isPublic !== false,
+                        postedAt: data.postedAt,
+                        createdAt: data.createdAt,
+                        updatedAt: data.updatedAt
                       });
-                      
-                      // Sort by date client-side
-                      churchEvents.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-                      
-                      if (churchEvents.length > 0) {
-                        console.log(`✅ Loaded ${churchEvents.length} PUBLIC events from ${collectionName}`);
-                        
-                        // Set ALL upcoming events
-                        setUpcomingEvents(churchEvents);
-                        
-                        // Save to localStorage for persistence
-                        localStorage.setItem('churchEvents', JSON.stringify(churchEvents.map(event => ({
-                          ...event,
-                          postedAt: convertTimestampToISO(event.postedAt),
-                          createdAt: convertTimestampToISO(event.createdAt),
-                          updatedAt: convertTimestampToISO(event.updatedAt)
-                        }))));
-                        
-                        activeUnsubscribe = eventsUnsubscribe;
-                        resolve(true);
-                      } else {
-                        console.log(`📭 No upcoming PUBLIC events found in ${collectionName}`);
-                        resolve(false);
-                      }
-                    },
-                    (error) => {
-                      console.error(`❌ ${collectionName} listener error:`, error);
-                      resolve(false);
                     }
-                  );
-                  
-                } catch (error) {
-                  console.error(`❌ Cannot setup ${collectionName} listener:`, error);
-                  resolve(false);
-                }
-              });
-            };
-
-            // Try all collections sequentially
-            const tryCollectionsSequentially = async () => {
-              let success = false;
-              for (const collectionName of collectionsToTry) {
-                success = await tryCollection(collectionName);
-                if (success) break;
+                  } catch (error) {
+                    console.error('Error processing event date:', error);
+                  }
+                });
+                
+                // Sort by date client-side
+                churchEvents.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+                
+                console.log('📊 Real-time events update:', churchEvents.length);
+                setUpcomingEvents(churchEvents);
+              },
+              (error) => {
+                console.error('❌ Firestore events error:', error);
               }
-
-              // If all collections fail, data will remain from localStorage
-              if (!success) {
-                console.log('📭 No events found in any collection, using localStorage data');
-              }
-            };
-
-            tryCollectionsSequentially();
-
-            // Return cleanup function
-            return () => {
-              if (activeUnsubscribe) {
-                activeUnsubscribe();
-              }
-            };
-            
+            );
           } catch (error) {
-            console.error('❌ Cannot setup PUBLIC events listener:', error);
+            console.error('❌ Cannot setup events listener:', error);
           }
         };
 
-        // Setup real-time events listener
-        const eventsCleanup = setupEventsListener();
+        setupAppointmentsListener();
+        setupEventsListener();
 
         setLoading(false);
-
-        return () => {
-          console.log('🧹 Cleaning up real-time listeners...');
-          appointmentsUnsubscribe();
-          if (eventsCleanup) eventsCleanup();
-        };
 
       } catch (error) {
         console.error('❌ Error initializing dashboard:', error);
         setLoading(false);
+        toast({
+          title: 'Dashboard Error',
+          description: 'Failed to load dashboard data.',
+          variant: 'destructive',
+        });
       }
     };
 
     initializeDashboard();
-  }, [checkAuthentication, router, toast]); // ADDED toast dependency
+
+    return () => {
+      console.log('🧹 Cleaning up real-time listeners...');
+      if (appointmentsUnsubscribe) appointmentsUnsubscribe();
+      if (eventsUnsubscribe) eventsUnsubscribe();
+    };
+  }, [toast]);
 
   const getStatusBadge = (status: string) => {
     const variants = {
       approved: 'default',
+      confirmed: 'default', 
       rejected: 'destructive',
+      cancelled: 'destructive',
       pending: 'secondary'
     } as const;
 
@@ -498,7 +519,9 @@ export default function ClientDashboardPage() {
   };
 
   const getUpcomingAppointment = () => {
-    const approvedAppointments = appointments.filter(apt => apt.status === 'approved');
+    const approvedAppointments = appointments.filter(apt => 
+      apt.status === 'approved' || apt.status === 'confirmed'
+    );
     const upcoming = approvedAppointments
       .filter(apt => {
         try {
@@ -513,22 +536,85 @@ export default function ClientDashboardPage() {
   };
 
   const upcomingAppointment = getUpcomingAppointment();
+  const displayAppointments = viewAllAppointments ? appointments : appointments.slice(0, 3);
+  const displayEvents = viewAllEvents ? upcomingEvents : upcomingEvents.slice(0, 3);
 
-  // Get only 3 appointments for display in dashboard
-  const displayAppointments = appointments.slice(0, 3);
-  // Get only 3 events for display in dashboard
-  const displayEvents = upcomingEvents.slice(0, 3);
+  const renderAppointmentDetails = (appointment: Appointment) => (
+    <Card key={appointment.id} className="border-l-4 border-l-primary mb-4">
+      <CardContent className="p-4">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <h3 className="font-semibold text-lg">
+                {formatEventType(appointment.eventType)}
+              </h3>
+              {getStatusBadge(appointment.status)}
+            </div>
+            <div className="text-xs text-muted-foreground">
+              Submitted: {formatDate(appointment.submittedAt)}
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Calendar className="h-4 w-4 text-primary" />
+              <div>
+                <div className="font-medium">Date</div>
+                <div className="text-muted-foreground">
+                  {formatDate(appointment.eventDate)}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-primary" />
+              <div>
+                <div className="font-medium">Time</div>
+                <div className="text-muted-foreground">{formatTime(appointment.eventTime)}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" />
+              <div>
+                <div className="font-medium">Guests</div>
+                <div className="text-muted-foreground">{appointment.guestCount} people</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <User className="h-4 w-4 text-primary" />
+              <div>
+                <div className="font-medium">Name</div>
+                <div className="text-muted-foreground">{appointment.fullName}</div>
+              </div>
+            </div>
+          </div>
 
-  if (!isAuthenticated) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Checking authentication...</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Phone className="h-4 w-4 text-primary" />
+              <div>
+                <div className="font-medium">Phone</div>
+                <div className="text-muted-foreground">{appointment.phone}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Mail className="h-4 w-4 text-primary" />
+              <div>
+                <div className="font-medium">Email</div>
+                <div className="text-muted-foreground">{appointment.email}</div>
+              </div>
+            </div>
+          </div>
+
+          {appointment.message && (
+            <div className="bg-muted/50 p-3 rounded-lg">
+              <div className="text-sm font-medium mb-1">Additional Notes:</div>
+              <div className="text-sm text-muted-foreground">"{appointment.message}"</div>
+            </div>
+          )}
         </div>
-      </div>
-    );
-  }
+      </CardContent>
+    </Card>
+  );
 
   if (loading) {
     return (
@@ -547,10 +633,10 @@ export default function ClientDashboardPage() {
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <Church className="w-16 h-16 mx-auto mb-4 text-muted-foreground" />
-          <h2 className="text-2xl font-bold mb-2">User Not Found</h2>
-          <p className="text-muted-foreground mb-4">Please log in to access your dashboard.</p>
+          <h2 className="text-2xl font-bold mb-2">Account Not Found</h2>
+          <p className="text-muted-foreground mb-4">Please book an appointment first to create your account.</p>
           <Button asChild>
-            <Link href="/login">Go to Login</Link>
+            <Link href="/c/appointments">Book Your First Appointment</Link>
           </Button>
         </div>
       </div>
@@ -571,6 +657,13 @@ export default function ClientDashboardPage() {
               <p className="mt-2 text-primary-foreground/80">
                 Welcome back! We're glad to have you with us.
               </p>
+              <div className="flex items-center gap-2 mt-2 text-sm">
+                <User className="w-4 h-4" />
+                <span>{userData.name}</span>
+                <Badge variant="secondary" className="text-xs">
+                  {isAuthenticated ? 'Authenticated' : 'Guest Access'}
+                </Badge>
+              </div>
             </div>
             <div className="flex items-center gap-4">
               <Avatar className="ring-4 ring-background">
@@ -601,7 +694,7 @@ export default function ClientDashboardPage() {
             <CardContent>
               <div className="text-2xl font-bold">{appointments.length}</div>
               <p className="text-xs text-muted-foreground">
-                {appointments.filter(apt => apt.status === 'approved').length} approved • Real-time
+                {appointments.filter(apt => apt.status === 'approved' || apt.status === 'confirmed').length} approved • Real-time
               </p>
             </CardContent>
           </Card>
@@ -626,7 +719,7 @@ export default function ClientDashboardPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Column */}
+          {/* Left Column - APPOINTMENTS */}
           <div className="space-y-8">
             {/* Upcoming Appointment */}
             {upcomingAppointment && (
@@ -669,22 +762,33 @@ export default function ClientDashboardPage() {
               </Card>
             )}
 
-            {/* Recent Appointments */}
+            {/* All Appointments */}
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <div>
-                  <CardTitle>Recent Appointments</CardTitle>
+                  <CardTitle>My Appointments</CardTitle>
                   <CardDescription>
-                    Your recent sacrament requests • Updates in real-time
+                    {viewAllAppointments ? 'All your appointments' : 'Your recent appointments'} • Updates in real-time
                   </CardDescription>
                 </div>
-                <div className="text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
-                  Total: {appointments.length}
+                <div className="flex items-center gap-2">
+                  <div className="text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
+                    Total: {appointments.length}
+                  </div>
+                  {appointments.length > 3 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setViewAllAppointments(!viewAllAppointments)}
+                    >
+                      {viewAllAppointments ? 'Show Less' : 'View All'}
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4 max-h-[400px] overflow-y-auto">
-                  {displayAppointments.length === 0 ? (
+                <div className="space-y-4">
+                  {appointments.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <Calendar className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No appointments yet</p>
@@ -696,40 +800,27 @@ export default function ClientDashboardPage() {
                       </Button>
                     </div>
                   ) : (
-                    displayAppointments.map((appointment) => (
-                      <div key={appointment.id} className="flex items-center justify-between p-3 rounded-lg border bg-card hover:shadow-md transition-shadow">
-                        <div className="flex items-center gap-3">
-                          <div className={`p-2 rounded-full ${
-                            appointment.status === 'approved' ? 'bg-green-100 text-green-600' :
-                            appointment.status === 'rejected' ? 'bg-red-100 text-red-600' :
-                            'bg-yellow-100 text-yellow-600'
-                          }`}>
-                            {appointment.status === 'approved' ? <CheckCircle className="w-4 h-4" /> : 
-                             appointment.status === 'rejected' ? <XCircle className="w-4 h-4" /> :
-                             <Clock className="w-4 h-4" />}
-                          </div>
-                          <div>
-                            <p className="font-medium">{formatEventType(appointment.eventType)}</p>
-                            <p className="text-sm text-muted-foreground">
-                              {formatDate(appointment.eventDate)} • {formatTime(appointment.eventTime)}
-                            </p>
-                            {appointment.fullName && (
-                              <p className="text-xs text-muted-foreground">
-                                {appointment.fullName}
-                              </p>
-                            )}
-                          </div>
+                    <>
+                      {displayAppointments.map(renderAppointmentDetails)}
+                      
+                      {appointments.length > 3 && !viewAllAppointments && (
+                        <div className="text-center pt-4 border-t">
+                          <Button
+                            variant="outline"
+                            onClick={() => setViewAllAppointments(true)}
+                          >
+                            View All {appointments.length} Appointments
+                          </Button>
                         </div>
-                        {getStatusBadge(appointment.status)}
-                      </div>
-                    ))
+                      )}
+                    </>
                   )}
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Right Column */}
+          {/* Right Column - EVENTS */}
           <div className="space-y-8">
             {/* Upcoming Events */}
             <Card>
@@ -737,16 +828,27 @@ export default function ClientDashboardPage() {
                 <div>
                   <CardTitle>Upcoming Church Events</CardTitle>
                   <CardDescription>
-                    Public events for everyone • Updates automatically
+                    {viewAllEvents ? 'All upcoming events' : 'Recent upcoming events'} • Updates automatically
                   </CardDescription>
                 </div>
-                <div className="text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
-                  Total: {upcomingEvents.length}
+                <div className="flex items-center gap-2">
+                  <div className="text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
+                    Total: {upcomingEvents.length}
+                  </div>
+                  {upcomingEvents.length > 3 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setViewAllEvents(!viewAllEvents)}
+                    >
+                      {viewAllEvents ? 'Show Less' : 'View All'}
+                    </Button>
+                  )}
                 </div>
               </CardHeader>
               <CardContent>
-                <div className="space-y-4 max-h-[400px] overflow-y-auto">
-                  {displayEvents.length === 0 ? (
+                <div className="space-y-4">
+                  {upcomingEvents.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <CalendarDays className="w-12 h-12 mx-auto mb-4 opacity-50" />
                       <p>No upcoming events</p>
@@ -754,34 +856,47 @@ export default function ClientDashboardPage() {
                       <p className="text-xs mt-1">Public events for all users</p>
                     </div>
                   ) : (
-                    displayEvents.map((event) => (
-                      <div key={event.id} className="flex items-start justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted/70 transition-colors border">
-                        <div className="flex-1">
-                          <p className="font-medium">{event.title}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {formatDate(event.date)} • {formatTime(event.time)}
-                          </p>
-                          <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                            <MapPin className="w-3 h-3" />
-                            {event.location}
-                          </p>
-                          {event.priest && (
+                    <>
+                      {displayEvents.map((event) => (
+                        <div key={event.id} className="flex items-start justify-between p-3 rounded-lg bg-muted/50 hover:bg-muted/70 transition-colors border">
+                          <div className="flex-1">
+                            <p className="font-medium">{event.title}</p>
+                            <p className="text-sm text-muted-foreground">
+                              {formatDate(event.date)} • {formatTime(event.time)}
+                            </p>
                             <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
-                              <CheckCircle className="w-3 h-3" />
-                              {event.priest}
+                              <MapPin className="w-3 h-3" />
+                              {event.location}
                             </p>
-                          )}
-                          {event.description && (
-                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                              {event.description}
-                            </p>
-                          )}
+                            {event.priest && (
+                              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-1">
+                                <CheckCircle className="w-3 h-3" />
+                                {event.priest}
+                              </p>
+                            )}
+                            {event.description && (
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                {event.description}
+                              </p>
+                            )}
+                          </div>
+                          <Badge variant="outline" className="ml-2 flex-shrink-0">
+                            {formatEventType(event.type)}
+                          </Badge>
                         </div>
-                        <Badge variant="outline" className="ml-2 flex-shrink-0">
-                          {formatEventType(event.type)}
-                        </Badge>
-                      </div>
-                    ))
+                      ))}
+                      
+                      {upcomingEvents.length > 3 && !viewAllEvents && (
+                        <div className="text-center pt-4 border-t">
+                          <Button
+                            variant="outline"
+                            onClick={() => setViewAllEvents(true)}
+                          >
+                            View All {upcomingEvents.length} Events
+                          </Button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
                 <div className="mt-4 pt-4 border-t">
@@ -789,6 +904,24 @@ export default function ClientDashboardPage() {
                     🔄 Public events • Visible to all parishioners
                   </p>
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* Book New Appointment Card */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Book New Appointment</CardTitle>
+                <CardDescription>
+                  Schedule your next church service or sacrament
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Button asChild className="w-full">
+                  <Link href="/c/appointments">
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Book Appointment
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
           </div>
