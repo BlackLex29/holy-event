@@ -24,6 +24,8 @@ import {
   MapPin,
 } from 'lucide-react';
 import { useToast } from '@/components/ui/use-toast';
+import { signOut } from 'firebase/auth';
+import { auth } from '@/lib/firebase-config';
 
 export const AppSidebar = () => {
   const pathname = usePathname();
@@ -52,24 +54,74 @@ export const AppSidebar = () => {
     { title: 'Profile', icon: Settings, href: '/a/settings' },
   ];
 
+  // ✅ COMPLETE LOGOUT FUNCTION
   const handleLogout = async () => {
     setIsLoggingOut(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 800));
-      localStorage.removeItem('userRole');
-      localStorage.removeItem('authToken');
+      // 1. Sign out from Firebase first
+      if (auth.currentUser) {
+        await signOut(auth);
+      }
+
+      // 2. Clear ALL authentication data from localStorage
+      const keysToRemove = [
+        'userRole',
+        'authToken', 
+        'userEmail',
+        'currentUser',
+        'firebaseUID',
+        'church_appointment_userId',
+        'church_appointment_userEmail',
+        'church_appointment_userFullName',
+        'church_appointment_userPhone',
+        'loginSecurityState',
+        'loginAttempts'
+      ];
+
+      keysToRemove.forEach(key => {
+        localStorage.removeItem(key);
+      });
+
+      // 3. Clear sessionStorage
       sessionStorage.clear();
+
+      // 4. Clear cookies (if any)
+      document.cookie.split(';').forEach(cookie => {
+        const eqPos = cookie.indexOf('=');
+        const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
+        document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+      });
+
+      // 5. Wait a bit for cleanup to complete
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // 6. Show success message
       toast({
         title: 'Logged out successfully',
         description: 'You have been signed out.',
       });
-      router.push('/login');
+
+      // 7. Redirect to login page with cache busting
+      router.push('/login?t=' + Date.now());
+      
+      // 8. Force reload to clear any cached state
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 100);
+
     } catch (error) {
+      console.error('Logout error:', error);
+      
+      // Fallback: Clear storage and redirect even if Firebase signout fails
+      localStorage.clear();
+      sessionStorage.clear();
+      
       toast({
-        title: 'Logout failed',
-        description: 'Please try again.',
-        variant: 'destructive',
+        title: 'Signed out',
+        description: 'You have been signed out.',
       });
+      
+      router.push('/login');
     } finally {
       setIsLoggingOut(false);
     }
@@ -141,7 +193,7 @@ export const AppSidebar = () => {
               <button
                 onClick={handleLogout}
                 disabled={isLoggingOut}
-                className="w-full text-left flex items-center gap-2 text-red-600 hover:text-red-700 disabled:opacity-50"
+                className="w-full text-left flex items-center gap-2 text-red-600 hover:text-red-700 disabled:opacity-50 transition-colors duration-200"
               >
                 <LogOut className="w-4 h-4" />
                 <span>{isLoggingOut ? 'Logging out...' : 'Logout'}</span>
