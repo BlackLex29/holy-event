@@ -5,7 +5,6 @@ import { format, isSunday, parseISO, isValid } from 'date-fns';
 import {
   Calendar as CalendarIcon,
   Clock,
-  MapPin,
   Users,
   Church,
   Phone,
@@ -16,6 +15,8 @@ import {
   UserCheck,
   FileCheck,
   BookOpen,
+  RotateCcw,
+  Database,
 } from 'lucide-react';
 import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -51,6 +52,9 @@ import { db } from '@/lib/firebase-config';
 import { 
   collection, 
   addDoc, 
+  getDocs,
+  query,
+  where,
   serverTimestamp,
   Timestamp,
   FieldValue 
@@ -84,21 +88,6 @@ const formSchema = z.object({
 type FormData = z.infer<typeof formSchema>;
 
 // ==================== INTERFACES ====================
-interface ChurchEvent {
-  id: string;
-  type: string;
-  title: string;
-  description: string;
-  date: string;
-  time: string;
-  location: string;
-  priest?: string;
-  postedAt: Timestamp | Date | string;
-  status?: string;
-  createdAt?: Timestamp | Date | string;
-  updatedAt?: Timestamp | Date | string;
-}
-
 interface AppointmentData {
   fullName: string;
   email: string;
@@ -111,7 +100,6 @@ interface AppointmentData {
   status: string;
   createdAt: FieldValue;
   updatedAt: FieldValue;
-  userId?: string;
 }
 
 interface UserAppointment {
@@ -126,8 +114,7 @@ interface UserAppointment {
   message?: string;
   status: string;
   createdAt: string;
-  firebaseId?: string;
-  userId?: string;
+  firebaseId: string;
 }
 
 // ==================== ALLOWED TIMES ====================
@@ -233,15 +220,21 @@ const serviceRequirements = {
 };
 
 // ==================== DATE HELPER FUNCTIONS ====================
-const safeFormatDate = (date: Date | string, formatStr: string): string => {
+const safeFormatDate = (date: Date | string | null | undefined, formatStr: string): string => {
   try {
+    if (!date) return 'Invalid date';
+    
     let dateObj: Date;
     
     if (typeof date === 'string') {
       dateObj = parseISO(date);
       if (!isValid(dateObj)) {
-        const [year, month, day] = date.split('-').map(Number);
-        dateObj = new Date(year, month - 1, day);
+        if (date.includes('-')) {
+          const [year, month, day] = date.split('-').map(Number);
+          dateObj = new Date(year, month - 1, day);
+        } else {
+          dateObj = new Date(date);
+        }
       }
     } else {
       dateObj = date;
@@ -277,97 +270,127 @@ const safeFormatTime = (time24: string): string => {
   }
 };
 
-const parseEventDate = (dateString: string): Date | null => {
+const parseEventDate = (dateString: string | null | undefined): Date | null => {
+  if (!dateString) return null;
+  
   try {
-    const [year, month, day] = dateString.split('-').map(Number);
-    const date = new Date(year, month - 1, day);
-    
-    if (isValid(date)) {
-      return date;
-    }
-    
+    // Always treat as string and try different formats
     const isoDate = parseISO(dateString);
     if (isValid(isoDate)) {
       return isoDate;
     }
     
-    return null;
-  } catch (error) {
-    console.error('Date parsing error:', error);
-    return null;
-  }
-};
-
-// ==================== USER ID MANAGEMENT ====================
-const getUserId = (): string => {
-  if (typeof window === 'undefined') return 'user_temp';
-  
-  let userId = localStorage.getItem('church_appointment_userId');
-  if (!userId) {
-    userId = 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    localStorage.setItem('church_appointment_userId', userId);
-  }
-  return userId;
-};
-
-const getUserEmail = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('church_appointment_userEmail');
-};
-
-const setUserEmail = (email: string) => {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem('church_appointment_userEmail', email);
-};
-
-// ==================== GET USER INFO FROM AUTH ====================
-const getCurrentUserInfo = (): {email?: string; fullName?: string; phone?: string} | null => {
-  if (typeof window === 'undefined') return null;
-  
-  try {
-    const userEmail = localStorage.getItem('church_appointment_userEmail');
-    const userFullName = localStorage.getItem('church_appointment_userFullName');
-    const userPhone = localStorage.getItem('church_appointment_userPhone');
-    
-    const userInfo: {email?: string; fullName?: string; phone?: string} = {};
-    
-    if (userEmail) userInfo.email = userEmail;
-    if (userFullName) userInfo.fullName = userFullName;
-    if (userPhone) userInfo.phone = userPhone;
-    
-    return Object.keys(userInfo).length > 0 ? userInfo : null;
-  } catch (error) {
-    console.error('Error getting user info:', error);
-    return null;
-  }
-};
-
-// ==================== AUTO-EMAIL DETECTION ====================
-const detectUserEmail = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  
-  try {
-    const sources = [
-      localStorage.getItem('church_appointment_userEmail'),
-      sessionStorage.getItem('userEmail'),
-      localStorage.getItem('userEmail'),
-    ];
-    
-    for (const email of sources) {
-      if (email && typeof email === 'string' && email.includes('@') && email.includes('.')) {
-        console.log('📧 Auto-detected user email:', email);
-        return email;
+    // Try yyyy-MM-dd format
+    if (dateString.includes('-')) {
+      const parts = dateString.split('-');
+      if (parts.length === 3) {
+        const [year, month, day] = parts.map(Number);
+        const date = new Date(year, month - 1, day);
+        if (isValid(date)) {
+          return date;
+        }
       }
+    }
+    
+    // Try as direct date string
+    const directDate = new Date(dateString);
+    if (isValid(directDate)) {
+      return directDate;
     }
     
     return null;
   } catch (error) {
-    console.error('Error detecting user email:', error);
+    console.error('Date parsing error:', error, 'Input:', dateString);
+    return null;
+  }
+};
+// ==================== FIREBASE APPOINTMENT FUNCTIONS ====================
+const loadAppointmentsFromFirebase = async (userEmail: string): Promise<UserAppointment[]> => {
+  try {
+    if (!db) {
+      console.error('Firebase not available');
+      return [];
+    }
+
+    console.log('🔄 Loading appointments from Firebase for email:', userEmail);
+    
+    const appointmentsRef = collection(db, 'appointments');
+    const q = query(appointmentsRef, where('email', '==', userEmail));
+    
+    const querySnapshot = await getDocs(q);
+    const appointments: UserAppointment[] = [];
+    
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      console.log('📄 Firebase document:', doc.id, data);
+      
+      let createdAt = '';
+      try {
+        if (data.createdAt && typeof data.createdAt.toDate === 'function') {
+          createdAt = data.createdAt.toDate().toISOString();
+        } else if (data.createdAt) {
+          createdAt = new Date(data.createdAt).toISOString();
+        } else {
+          createdAt = new Date().toISOString();
+        }
+      } catch (e) {
+        createdAt = new Date().toISOString();
+      }
+      
+      appointments.push({
+        id: doc.id,
+        firebaseId: doc.id,
+        fullName: data.fullName || '',
+        email: data.email || '',
+        phone: data.phone || '',
+        eventType: data.eventType || '',
+        eventDate: data.eventDate || '',
+        eventTime: data.eventTime || '',
+        guestCount: data.guestCount || '',
+        message: data.message || '',
+        status: data.status || 'pending',
+        createdAt: createdAt,
+      });
+    });
+    
+    // Manual sorting in JavaScript
+    appointments.sort((a, b) => {
+      const dateA = parseEventDate(a.createdAt) || new Date(0);
+      const dateB = parseEventDate(b.createdAt) || new Date(0);
+      return dateB.getTime() - dateA.getTime();
+    });
+    
+    console.log(`✅ Loaded ${appointments.length} appointments from Firebase`);
+    return appointments;
+    
+  } catch (error: any) {
+    console.error('❌ Error loading appointments from Firebase:', error);
+    return [];
+  }
+};
+
+const saveAppointmentToFirebase = async (appointmentData: AppointmentData): Promise<string | null> => {
+  try {
+    if (!db) {
+      console.error('Firebase not available');
+      return null;
+    }
+
+    console.log('💾 Saving appointment to Firebase:', appointmentData);
+    
+    const appointmentsCollection = collection(db, 'appointments');
+    const docRef = await addDoc(appointmentsCollection, appointmentData);
+    
+    console.log('✅ Successfully saved to Firebase with ID:', docRef.id);
+    return docRef.id;
+    
+  } catch (error: any) {
+    console.error('❌ Error saving to Firebase:', error);
     return null;
   }
 };
 
-// ==================== FIREBASE ERROR CHECKER ====================
+// ==================== FIREBASE CONNECTION CHECK ====================
 const checkFirebaseConnection = async (): Promise<boolean> => {
   try {
     if (!db) {
@@ -375,38 +398,16 @@ const checkFirebaseConnection = async (): Promise<boolean> => {
       return false;
     }
     
-    // Test if we can access Firestore by trying to add a test document
-    const testCollection = collection(db, 'connection_test');
-    const testDoc = await addDoc(testCollection, {
-      test: true,
-      timestamp: serverTimestamp()
-    });
+    const testCollection = collection(db, 'appointments');
+    const q = query(testCollection);
+    await getDocs(q);
     
-    // Immediately delete the test document
-    // Note: You might need to import deleteDoc and doc for this
     console.log('✅ Firebase connection test successful');
     return true;
   } catch (error: any) {
     console.error('❌ Firebase connection test failed:', error);
-    console.error('Error code:', error.code);
-    console.error('Error message:', error.message);
     return false;
   }
-};
-
-// ==================== DUPLICATE APPOINTMENT CHECKER ====================
-const checkDuplicateAppointment = (
-  appointments: UserAppointment[], 
-  newAppointment: FormData
-): boolean => {
-  const newDate = format(newAppointment.eventDate, 'yyyy-MM-dd');
-  
-  return appointments.some(appointment => 
-    appointment.eventType === newAppointment.eventType &&
-    appointment.eventDate === newDate &&
-    appointment.eventTime === newAppointment.eventTime &&
-    appointment.fullName.toLowerCase() === newAppointment.fullName.toLowerCase()
-  );
 };
 
 // ==================== MAIN COMPONENT ====================
@@ -419,10 +420,9 @@ export default function EventAppointmentPage() {
   const [notesCount, setNotesCount] = useState(0);
   const [userAppointments, setUserAppointments] = useState<UserAppointment[]>([]);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
-  const [currentUserInfo, setCurrentUserInfo] = useState<{email?: string; fullName?: string; phone?: string} | null>(null);
-  const [autoFilledEmail, setAutoFilledEmail] = useState<string | null>(null);
   const [firebaseAvailable, setFirebaseAvailable] = useState<boolean | null>(null);
   const [hasAutoFilledNotes, setHasAutoFilledNotes] = useState(false);
+  const [isLoadingAppointments, setIsLoadingAppointments] = useState(false);
 
   const {
     register,
@@ -445,7 +445,6 @@ export default function EventAppointmentPage() {
   const eventTime = useWatch({ control, name: 'eventTime' });
   const message = watch('message');
   const email = watch('email');
-  const guestCount = watch('guestCount');
 
   // Check Firebase connection on component mount
   useEffect(() => {
@@ -455,33 +454,12 @@ export default function EventAppointmentPage() {
     };
     
     checkConnection();
-  }, [toast]);
+  }, []);
 
   // Watch for message changes to update character count
   useEffect(() => {
     setNotesCount(message?.length || 0);
   }, [message]);
-
-  // Load user info and appointments on component mount
-  useEffect(() => {
-    loadUserInfo();
-    loadUserAppointments();
-  }, []);
-
-  // Auto-detect and fill user email on component mount
-  useEffect(() => {
-    const detectedEmail = detectUserEmail();
-    if (detectedEmail) {
-      setAutoFilledEmail(detectedEmail);
-      setValue('email', detectedEmail, { shouldValidate: true });
-      
-      toast({
-        title: 'Email Auto-filled!',
-        description: `We detected your email: ${detectedEmail}`,
-        variant: 'default',
-      });
-    }
-  }, [setValue, toast]);
 
   // Auto-fill notes when event type changes
   useEffect(() => {
@@ -507,27 +485,51 @@ export default function EventAppointmentPage() {
     }
   }, [eventType]);
 
-  // Load user information from localStorage/auth
-  const loadUserInfo = () => {
-    const userInfo = getCurrentUserInfo();
-    setCurrentUserInfo(userInfo);
+  // Load appointments when email changes
+  useEffect(() => {
+    if (email && email.includes('@') && email.includes('.')) {
+      setCurrentUserEmail(email);
+      loadUserAppointments(email);
+    }
+  }, [email]);
+
+  // Load appointments from Firebase ONLY
+  const loadUserAppointments = async (userEmail: string) => {
+    if (!firebaseAvailable) return;
     
-    if (userInfo?.email) {
-      setCurrentUserEmail(userInfo.email);
-      setValue('email', userInfo.email);
-      
-      // Auto-fill other fields if available
-      if (userInfo.fullName) {
-        setValue('fullName', userInfo.fullName);
+    setIsLoadingAppointments(true);
+    
+    try {
+      const appointments = await loadAppointmentsFromFirebase(userEmail);
+      setUserAppointments(appointments);
+
+      if (appointments.length > 0) {
+        toast({
+          title: `Found ${appointments.length} Appointment(s)`,
+          description: 'Your appointments have been loaded from church database.',
+          variant: 'default',
+        });
       }
-      if (userInfo.phone) {
-        setValue('phone', userInfo.phone);
-      }
-      
+
+    } catch (error) {
+      console.error('Error loading appointments:', error);
       toast({
-        title: 'Welcome Back!',
-        description: 'Your information has been auto-filled.',
-        variant: 'default',
+        title: 'Error Loading Appointments',
+        description: 'Please check your connection and try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsLoadingAppointments(false);
+    }
+  };
+
+  // Manual refresh appointments
+  const handleRefreshAppointments = () => {
+    if (currentUserEmail) {
+      loadUserAppointments(currentUserEmail);
+      toast({
+        title: 'Refreshing Appointments',
+        description: 'Loading your appointments from church database...',
       });
     }
   };
@@ -615,68 +617,12 @@ export default function EventAppointmentPage() {
     setHasAutoFilledNotes(false);
   };
 
-  // Load user appointments from localStorage
-  const loadUserAppointments = () => {
-    try {
-      if (typeof window === 'undefined') return;
-      
-      const stored = localStorage.getItem('appointments');
-      if (stored) {
-        const allAppointments = JSON.parse(stored);
-        const currentUserEmail = getUserEmail();
-        const userId = getUserId();
-        
-        // Filter: I-display lang ang appointments ng current user
-        const userAppointments = allAppointments.filter((appointment: UserAppointment) => 
-          appointment.userId === userId || appointment.email === currentUserEmail
-        );
-        
-        // Sort by date (newest first) with safe date comparison
-        const sortedAppointments = userAppointments.sort((a: UserAppointment, b: UserAppointment) => {
-          const dateA = parseEventDate(a.createdAt) || new Date(0);
-          const dateB = parseEventDate(b.createdAt) || new Date(0);
-          return dateB.getTime() - dateA.getTime();
-        });
-        
-        setUserAppointments(sortedAppointments);
-      }
-    } catch (error) {
-      console.error('Error loading appointments from localStorage:', error);
-    }
-  };
-
-  // ✅ IMPROVED SUBMIT FUNCTION WITH DUPLICATE CHECK
+  // Submit function - FIREBASE ONLY
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
-    console.log('🔄 Starting submission process...');
     
     try {
-      const userId = getUserId();
       const userEmail = data.email.trim();
-      
-      // Check for duplicate appointment
-      const isDuplicate = checkDuplicateAppointment(userAppointments, data);
-      if (isDuplicate) {
-        toast({
-          title: 'Duplicate Appointment',
-          description: 'You already have an appointment for this event, date, and time.',
-          variant: 'destructive',
-        });
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Save user email for future identification
-      setUserEmail(userEmail);
-      setCurrentUserEmail(userEmail);
-
-      // Also save name and phone for future auto-fill
-      if (data.fullName) {
-        localStorage.setItem('church_appointment_userFullName', data.fullName.trim());
-      }
-      if (data.phone) {
-        localStorage.setItem('church_appointment_userPhone', data.phone.trim());
-      }
 
       // Prepare data for Firestore
       const appointmentData: AppointmentData = {
@@ -690,49 +636,24 @@ export default function EventAppointmentPage() {
         status: 'pending',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        userId: userId,
       };
 
-      // Add message only if it exists and trim to 200 characters
+      // Add message only if it exists
       if (data.message && data.message.trim() !== '') {
         appointmentData.message = data.message.trim().substring(0, 200);
       }
 
-      console.log('📤 Form data prepared:', appointmentData);
-      console.log('🔥 Firebase db instance:', db);
-      console.log('📁 Collection target: appointments');
+      // ✅ SAVE TO FIREBASE ONLY
+      const firebaseId = await saveAppointmentToFirebase(appointmentData);
 
-      let firebaseId = '';
-      let firebaseSuccess = false;
-
-      // ✅ TRY FIREBASE FIRST WITH PROPER ERROR HANDLING
-      if (firebaseAvailable && db) {
-        try {
-          console.log('🎯 Attempting to add document to Firestore...');
-          
-          const appointmentsCollection = collection(db, 'appointments');
-          const docRef = await addDoc(appointmentsCollection, appointmentData);
-          
-          firebaseId = docRef.id;
-          firebaseSuccess = true;
-          
-          console.log('✅ Successfully saved to Firestore with ID:', docRef.id);
-          
-        } catch (firebaseError: any) {
-          console.error('❌ Firestore specific error:', firebaseError);
-          console.error('❌ Error code:', firebaseError.code);
-          console.error('❌ Error message:', firebaseError.message);
-          
-          // Continue with localStorage fallback
-          firebaseSuccess = false;
-        }
-      } else {
-        console.log('⚠️ Firebase not available, saving to localStorage only');
+      if (!firebaseId) {
+        throw new Error('Failed to save to database');
       }
 
-      // ✅ SAVE TO LOCALSTORAGE (ALWAYS)
+      // Create appointment object for local state
       const appointment: UserAppointment = {
-        id: firebaseId || `local_${Date.now()}`,
+        id: firebaseId,
+        firebaseId: firebaseId,
         fullName: data.fullName.trim(),
         email: userEmail,
         phone: data.phone.trim(),
@@ -742,20 +663,15 @@ export default function EventAppointmentPage() {
         guestCount: data.guestCount,
         status: 'pending',
         createdAt: new Date().toISOString(),
-        firebaseId: firebaseId || undefined,
-        userId: userId,
       };
 
       if (data.message && data.message.trim() !== '') {
         appointment.message = data.message.trim().substring(0, 200);
       }
 
-      const existing = JSON.parse(localStorage.getItem('appointments') || '[]');
-      existing.push(appointment);
-      localStorage.setItem('appointments', JSON.stringify(existing));
-
       // Update local state
-      loadUserAppointments();
+      setUserAppointments(prev => [appointment, ...prev]);
+      setCurrentUserEmail(userEmail);
 
       // Set success data
       setSuccessData({
@@ -768,7 +684,7 @@ export default function EventAppointmentPage() {
       // Show success message
       setShowSuccess(true);
 
-      // Reset form but keep email and user info
+      // Reset form but keep email
       reset({
         email: data.email,
         fullName: '',
@@ -789,10 +705,10 @@ export default function EventAppointmentPage() {
         setSuccessData(null);
       }, 8000);
 
-      // Show appropriate success message
+      // Show success message
       toast({
         title: 'Appointment Submitted Successfully!',
-        description: 'Your appointment has been submitted. We will contact you within 24 hours to confirm.',
+        description: 'Your appointment has been saved to the church database.',
         variant: 'default',
       });
 
@@ -801,7 +717,7 @@ export default function EventAppointmentPage() {
       
       toast({
         title: 'Submission Error',
-        description: error.message || 'Failed to submit appointment. Please try again.',
+        description: 'Failed to submit appointment to database. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -864,6 +780,25 @@ export default function EventAppointmentPage() {
 
   // Render user appointments
   const renderUserAppointments = () => {
+    if (isLoadingAppointments) {
+      return (
+        <Card className="mt-8">
+          <CardHeader>
+            <CardTitle className="text-xl flex items-center gap-2">
+              <CalendarIcon className="h-5 w-5" />
+              Your Appointments
+            </CardTitle>
+            <CardDescription>
+              <div className="flex items-center gap-2">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                Loading your appointments from church database...
+              </div>
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      );
+    }
+
     if (userAppointments.length === 0) {
       return (
         <Card className="mt-8">
@@ -873,7 +808,10 @@ export default function EventAppointmentPage() {
               Your Appointments
             </CardTitle>
             <CardDescription>
-              You don't have any appointments yet. Book your first appointment above!
+              {currentUserEmail 
+                ? "You don't have any appointments yet. Book your first appointment above!"
+                : "Enter your email to view your appointments."
+              }
             </CardDescription>
           </CardHeader>
         </Card>
@@ -883,12 +821,24 @@ export default function EventAppointmentPage() {
     return (
       <Card className="mt-8">
         <CardHeader>
-          <CardTitle className="text-xl flex items-center gap-2">
-            <CalendarIcon className="h-5 w-5" />
-            Your Appointments ({userAppointments.length})
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-xl flex items-center gap-2">
+              <CalendarIcon className="h-5 w-5" />
+              Your Appointments ({userAppointments.length})
+            </CardTitle>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefreshAppointments}
+              disabled={isLoadingAppointments}
+              className="flex items-center gap-2"
+            >
+              <RotateCcw className={`h-4 w-4 ${isLoadingAppointments ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+          </div>
           <CardDescription>
-            Here are your scheduled appointments. These are private and only visible to you.
+            All appointments are stored in the church database.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -908,8 +858,14 @@ export default function EventAppointmentPage() {
                           </h3>
                           {getStatusBadge(appointment.status)}
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          Submitted: {createdAt ? safeFormatDate(createdAt, 'MMM dd, yyyy • h:mm a') : 'Invalid date'}
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="flex items-center gap-1">
+                            <Database className="h-3 w-3" />
+                            Church Database
+                          </Badge>
+                          <div className="text-xs text-muted-foreground">
+                            Submitted: {createdAt ? safeFormatDate(createdAt, 'MMM dd, yyyy • h:mm a') : 'Invalid date'}
+                          </div>
                         </div>
                       </div>
                       
@@ -953,12 +909,9 @@ export default function EventAppointmentPage() {
                         </div>
                       )}
 
-                      {appointment.firebaseId && (
-                        <div className="text-xs text-green-600 flex items-center gap-1">
-                          <CheckCircle className="h-3 w-3" />
-                          Submitted to church administration
-                        </div>
-                      )}
+                      <div className="text-xs text-muted-foreground">
+                        Database ID: {appointment.firebaseId}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -984,15 +937,13 @@ export default function EventAppointmentPage() {
             Church Events & Appointments
           </h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Book your sacrament at church-approved times only. Your appointments are private and secure.
-            {eventType === 'baptism' && ' Baptism is available every Sunday.'}
+            Book your sacrament at church-approved times only. All appointments are securely stored in the church database.
           </p>
 
-          {(currentUserInfo?.email || autoFilledEmail) && (
-            <div className="mt-4 bg-green-50 border border-green-200 rounded-lg p-3 inline-block">
-              <p className="text-green-700 text-sm">
-                ✅ Welcome back! Your email has been auto-filled.
-                {autoFilledEmail && ` Detected: ${autoFilledEmail}`}
+          {firebaseAvailable === false && (
+            <div className="mt-4 bg-yellow-50 border border-yellow-200 rounded-lg p-3 inline-block">
+              <p className="text-yellow-700 text-sm">
+                ⚠️ Cannot connect to church database. Please check your internet connection.
               </p>
             </div>
           )}
@@ -1013,7 +964,7 @@ export default function EventAppointmentPage() {
                   </div>
                   <div className="flex-1">
                     <h3 className="font-bold text-lg text-green-900 mb-2">
-                      ✅ Appointment Request Sent!
+                      ✅ Appointment Submitted to Church Database!
                     </h3>
                     <div className="space-y-2 text-sm text-green-800">
                       <p><strong>Name:</strong> {successData.name}</p>
@@ -1046,7 +997,7 @@ export default function EventAppointmentPage() {
               <CardHeader>
                 <CardTitle className="text-2xl">Book Your Appointment</CardTitle>
                 <CardDescription>
-                  Select event, date, and approved time slot.
+                  Select event, date, and approved time slot. All data is saved directly to church database.
                   <span className="font-bold block mt-1">
                     Note: After setting an appointment, complete all the required documents and submit them to the
                     church at least one (1) month before the chosen date of the service.
@@ -1127,24 +1078,21 @@ export default function EventAppointmentPage() {
                     </div>
                   </div>
 
-                  {/* EMAIL - AUTO-FILLED */}
+                  {/* EMAIL */}
                   <div className="space-y-2">
                     <Label>Email *</Label>
                     <Input 
                       {...register('email')} 
                       type="email" 
                       placeholder="juan@example.com" 
-                      disabled={isSubmitting || !!currentUserInfo?.email || !!autoFilledEmail} 
-                      className={(currentUserInfo?.email || autoFilledEmail) ? "bg-muted" : ""}
+                      disabled={isSubmitting} 
                     />
-                    {(currentUserInfo?.email || autoFilledEmail) && (
-                      <p className="text-xs text-green-600">
-                        ✅ Email auto-filled from your account
-                      </p>
-                    )}
                     {errors.email && (
                       <p className="text-sm text-destructive">{errors.email.message}</p>
                     )}
+                    <p className="text-xs text-muted-foreground">
+                      Your appointments will be loaded using this email
+                    </p>
                   </div>
 
                   {/* DATE PICKER */}
@@ -1223,7 +1171,7 @@ export default function EventAppointmentPage() {
                     </div>
                   )}
 
-                  {/* GUESTS - INALIS ANG INDICATOR SA GILID */}
+                  {/* GUESTS */}
                   <div className="space-y-2">
                     <Label>Number of Guests *</Label>
                     <Input 
@@ -1293,20 +1241,26 @@ export default function EventAppointmentPage() {
                     type="submit"
                     size="lg"
                     className="w-full"
-                    disabled={isSubmitting || !eventType || !date || !eventTime}
+                    disabled={isSubmitting || !eventType || !date || !eventTime || !firebaseAvailable}
                   >
                     {isSubmitting ? (
                       <>
                         <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-background border-t-transparent" />
-                        Submitting...
+                        Saving to Church Database...
                       </>
                     ) : (
                       <>
-                        <Church className="mr-2 h-5 w-5" />
-                        Submit Appointment Request
+                        <Database className="mr-2 h-5 w-5" />
+                        Submit to Church Database
                       </>
                     )}
                   </Button>
+
+                  {!firebaseAvailable && (
+                    <p className="text-sm text-destructive text-center">
+                      Cannot connect to church database. Please check your internet connection.
+                    </p>
+                  )}
                 </form>
               </CardContent>
             </Card>
@@ -1379,29 +1333,20 @@ export default function EventAppointmentPage() {
               </Card>
             </div>
 
-            {/* Service Information */}
-            <Card>
+            {/* Data Security Notice */}
+            <Card className="bg-blue-50 border-blue-200">
               <CardHeader>
-                <CardTitle className="text-lg">Service Information</CardTitle>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Database className="h-5 w-5 text-blue-600" />
+                  Church Database Storage
+                </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3 text-sm">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Service Duration:</span>
-                    <span className="font-semibold">1 hour maximum</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Booking Lead Time:</span>
-                    <span className="font-semibold">24 hours minimum</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Maximum Guests:</span>
-                    <span className="font-semibold text-primary">1000 people</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Confirmation:</span>
-                    <span className="font-semibold text-primary">Within 24 hours</span>
-                  </div>
+                <div className="space-y-2 text-sm text-blue-700">
+                  <p>✅ All appointments stored in church database</p>
+                  <p>✅ Accessible from any device with your email</p>
+                  <p>✅ Securely backed up and protected</p>
+                  <p>✅ Never lost even if you clear browser data</p>
                 </div>
               </CardContent>
             </Card>
